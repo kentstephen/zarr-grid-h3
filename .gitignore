@@ -1,0 +1,7 @@
+.claude/memory/
+.env
+__pycache__/
+*.pyc
+.venv/
+proto/cache/
+proto/shots/
