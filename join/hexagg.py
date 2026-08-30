@@ -96,7 +96,14 @@ def build(res, window_npz, stats=True):
         raise ValueError(res)
     cells = cells[covered]; bpv = {k: v[covered] for k, v in bpv.items()}; ffwi = {k: v[:, covered] for k, v in ffwi.items()}
     xy, starts = polygons(cells)
-    return dict(res=res, cells=cells, bp=bpv, ffwi=ffwi, times=times, xy=xy, starts=starts, build_s=time.time() - t0)
+    # gridDisk(1) as indices, (K, 7) uint32, self where the neighbour is off the table:
+    # the browser averages over the disk to smooth the wave's lift. No pentagons in CONUS.
+    dsk = np.asarray(grid_disk(pa.array(cells), 1, flatten=True)).astype(np.uint64).reshape(cells.size, 7)
+    o = np.argsort(cells); cs = cells[o]
+    posn = np.searchsorted(cs, dsk); posn[posn >= cs.size] = 0
+    hitn = cs[posn] == dsk
+    nbrs = np.where(hitn, o[posn], np.arange(cells.size)[:, None]).astype(np.uint32)
+    return dict(res=res, cells=cells, bp=bpv, ffwi=ffwi, times=times, xy=xy, starts=starts, nbrs=nbrs, build_s=time.time() - t0)
 
 
 if __name__ == "__main__":
