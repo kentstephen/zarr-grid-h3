@@ -108,3 +108,77 @@ First flight 2026-08-30, headless Chrome 151 via playwright against `marimo run`
 - The label layer in the store: write `hex7` as a (y, x) uint64 array next to the
   data (the docs/02 "stored label layer") and read it back instead of recomputing,
   to test the zarr-conventions/dggs vocabulary on a real store.
+
+## Flight results, the notebook (2026-08-30, later the same day)
+
+`hrrr-heat-domes.py` at the repo root; `fly.py` flies it headless (playwright,
+Chrome, software GL: no GPU on the runner, so render times are an upper bound).
+
+What was done against the steps above:
+
+1. Chassis copied: constants, DuckDB, PMTiles counties (cache-first), `MirrorStore`,
+   store cell, window cell, HOLD memo, READ_RAIN / READ_WIND and the wx packing.
+2. The fold is gone, and so is xarray-sql. A pixel-hour `SELECT` with no aggregate is
+   only a pivot, and it would materialise ~148M rows x 32 B = 4.7 GB of Arrow for a
+   CONUS week before the pivot. The read is block-wise off the Zarr: for each variable
+   and each 45x45 store block holding a land pixel of BOX, slice the window's hours and
+   write them into the (F, N) land-pixel matrix (8 threads, through the mirror). The
+   res 7 label is computed once in Python from the store's lat/lon (this repo's
+   premise); `pix2h` does not exist any more.
+3. `RasterFilm` carries everything from `HexFilm`: window loader, click chart (with the
+   contour levels as dashed lines on the sustained-heat chart), field switch, rain /
+   wind sliders, HUD collapse, fullscreen, keyboard, day ticks, fps. Boundaries at
+   every CONTOURS level on pixel edges, under the rule select (pixel / any / majority /
+   all). A frame is one pass: per pixel a level code (how many contours it clears), the
+   rule per res 6 parent, then every pixel edge whose two sides differ in code is a
+   segment for the levels in between.
+4. Dome table: `DOME_RULE` applied per parent in numpy, the member cells dissolved per
+   (frame, level) with `h3_cells_to_multi_polygon_wkb`, area (Albers) and centroid;
+   next to the largest blob the table shows every blob's area and the member pixel
+   count x 9 km2 at that hour.
+5. Bytes: BOX is None by default (the full grid, 879,370 land px, 148 MB per field for
+   the week, boot 158 s); (-95, 29, -69, 46), the eastern dome's region, is a 745x834
+   grid window, 339,323 land px, 57 MB per field, boot 36 s. The HUD's window note shows
+   the MB per field for the dates picked and says "seconds (chunk on the disk
+   mirror)" when every store chunk the window touches is mirrored for all variables.
+6. Cross-grid join (MRMS): not started.
+
+Measured, default window (Jun 29 to Jul 5, 2026, mirrored chunk 47, five variables),
+first with the eastern-dome BOX, then the full grid:
+
+- Kernel, all cells as a script: 11.5 s. Store open 2.6 s, counties 0.0 s (parquet
+  cache), geometry 1.4 s (mesh 0.1 s), read 2.9 s (219 blocks x 5 variables, 2,190
+  ranges from disk, 0 fetched), dome table 2.9 s (10.1M cell-hours over 1 C, 6,363
+  blobs >= 500 km2).
+- Browser: boot to first frame 36 s (57 MB frames + 57 MB wx + 5 MB mesh + 6 MB
+  indices over the bridge); label index + 621,330-quad mesh 80 ms; texture paint 5 ms
+  per frame; dome pass (level codes, rule, edges) 8-13 ms per frame.
+- Pick: "px (377, 446) · Craig County, VA · via H3 label (res 7) · cell
+  872a8e76dffffff · 25.0 C".
+- 2026-07-02 16Z, +3 C: majority 196,730 member px; pixel 200,148; all 182,723.
+  Boundary edges over all four levels: 53,866 / 75,972 / 53,424. Largest >= 3 C blob
+  peaks at 2.40M km2 (frame 95, Jul 3 23Z, centred 37.0N 85.1W); >= 5 C at 1.71M km2.
+
+Two findings that change the prototype's story:
+
+- deck's `SimpleMeshLayer` re-uploads `texture` only when the prop is a different
+  object; `updateTriggers` do not reach it. The prototype painted one canvas in place,
+  so its "sustained heat" screenshot still shows the heat-index ramp. Two canvases,
+  alternated per paint, fix it.
+- A `PathLayer` of ~54k pixel-edge segments costs ~1.2 s per frame in CPU tesselation.
+  As four `LineLayer`s (instanced, binary attributes) a step is ~820 ms in-page in
+  software GL against ~270 ms with boundaries off; as one `LineLayer` with per-edge
+  colour and width, 817 ms: identical, so the ~550 ms is the software rasteriser
+  filling 54k-76k wide segments, not deck's layer machinery (the dome pass itself is
+  10 ms). The raster alone at ~270 ms per step is the 621k-quad mesh in software GL.
+  Neither number says anything about a real GPU; that measurement is Stephen's
+  browser's to make (the ruler shows paint / render / dome ms live).
+- Full grid (BOX = None): boot 158 s, mesh 305 ms, paint 10 ms, dome pass 16-21 ms,
+  77k-107k edges; software GL step ~0.9 s raster alone, ~2.0-2.3 s with boundaries.
+  Pick "px (578, 964) · Labette County, KS · via H3 label (res 7)". Jul 2 16Z, +3 C:
+  majority 233,138 px, pixel 237,613, all 213,778.
+- The raster paints at alpha 255 (the prototype's value-scaled alpha for sustained
+  heat is gone); an opacity slider in the HUD sets the mesh layer's opacity prop.
+- Carto's tiles (dark_nolabels included) watermark "API KEY REQUIRED"; OpenStreetMap
+  refuses headless apps (403). Esri's Dark Gray Canvas (base + reference) is keyless
+  for light use and is the basemap now.

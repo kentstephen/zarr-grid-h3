@@ -5,3 +5,5 @@ __pycache__/
 .venv/
 proto/cache/
 proto/shots/
+shots/
+__marimo__/
