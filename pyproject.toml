@@ -17,6 +17,7 @@ dependencies = [
     "pyproj>=3.7",
     "scipy>=1.18.1",
     "xarray",
+    "xarray-sql>=0.3.3",
     "zarr>=3",
 ]
 
