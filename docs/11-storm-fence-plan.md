@@ -189,3 +189,50 @@ LIVE 2 days (39 common frames at flight time):
 - Whether MRMS 0.01 deg at CONUS scale needs the box constraint always on
   (12M pixels full CONUS; heat domes carried full CONUS at 3 km, this is
   ~9x that per frame).
+
+## Flown again (2026-08-31, evening): the load-window wall, found and measured
+
+Loading fixed windows from the transport hit a wall that live never hits.
+Symptom: press load on a long window and the config lands (title, labels,
+stamp, note all flip to the new dates) but the frames stay the old live
+buffer. The ruler keeps saying 39 frames under a 168-frame header; the
+raster shows yesterday's weather labeled with the requested hours. A
+stray "Cannot read properties of undefined (reading 'op')" in the console
+is downstream wreckage of the same failure, not a separate bug.
+
+Root cause, confirmed by headless repro: marimo ships anywidget buffer
+traits as base64 strings inside one JSON websocket message, and V8 caps
+strings at 0x1fffffe8 = 536,870,888 chars. At this BOX (2.43M MRMS px +
+325K HRRR px per frame, ~2.76 MB/frame):
+
+- 5 days = 120 frames = 291.6 MB = 388.8M base64 chars: fits. The Ida
+  window (2021-08-28..09-01) loaded fully in ~3.3 min cold, fence 4,201
+  cells at the 18Z landfall hour, zero errors. Slow is not broken: the
+  cold HRRR chunk is minutes from S3 by design.
+- 7 days = 168 frames = 408.2 MB = 544.3M chars: over the cap. The trait
+  update dies silently in the browser. The repro harness itself crashed
+  on the same limit (node ERR_STRING_TOO_LONG, 0x1fffffe8) relaying it.
+- So the honest limit at this BOX is 6 days (349.9 MB = 466.6M chars),
+  not the advertised 7. HOURLY_MAX_DAYS lies by one day.
+
+Fix directions (not yet applied):
+
+1. Byte-aware cap: checkWindow already computes the MB estimate; block
+   load past ~450M base64 chars and drop HOURLY_MAX_DAYS to match. Three
+   lines, makes today's notebook honest.
+2. Chunk the transfer: frames as per-day traits reassembled in JS. No
+   ceiling, more wiring.
+3. Hexes instead of pixels: ship per-res-6-cell bytes (78,688 cells,
+   ~157 KB/frame both fields, 17x smaller). The string cap moves from 6
+   days to ~4.5 months and the binding constraint becomes read time
+   (~20M MRMS px-hours/s server-side), not bytes. The pick, chart, and
+   fence already live at cell level; only the field fill changes, and
+   the cost is the thesis: cell-mean fill smooths convective cores, the
+   native-grid raster reads as radar. Cell max keeps cores, exaggerates
+   area. Res 7 (~550K cells) is a 4x middle ground, ~3 weeks of window.
+   At 30+ days the frames themselves want rethinking (daily max is
+   another 24x; a year of daily maxima is 29 MB).
+
+Direction chosen (Stephen, 2026-08-31): hexes for longer windows in
+general; raster stays the short-window look. Shape TBD between the
+window-size switch and an explicit toggle.
