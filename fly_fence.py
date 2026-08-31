@@ -19,8 +19,8 @@ try:
         pg.on("pageerror", lambda e: logs.append(f"[pageerror] {e}"))
         pg.goto(f"http://127.0.0.1:{PORT}", wait_until="load")
         t = time.perf_counter()
-        pg.wait_for_selector(".sf-map > canvas", timeout=240_000)
-        deadline = time.time() + 420
+        pg.wait_for_selector(".sf-map canvas", timeout=240_000)
+        deadline = time.time() + 1200
         while time.time() < deadline:
             txt = pg.locator(".sf-ruler").inner_text()
             if "frames" in txt and " 0 frames" not in txt:
@@ -38,7 +38,7 @@ try:
         box = pg.locator(".sf-map").bounding_box()
         pg.mouse.click(box["x"] + box["width"] * 0.55, box["y"] + box["height"] * 0.5)
         time.sleep(1.5)
-        print("pick:", pg.locator(".sf-cname").inner_text(), "|", pg.locator(".sf-how").inner_text(), "|", pg.locator(".sf-cval").inner_text())
+        print("pick:", pg.locator(".sf-cname").inner_text(), "|", pg.locator(".sf-how.sf-num").inner_text(), "|", pg.locator(".sf-cval").inner_text())
         pg.screenshot(path=str(SHOTS / "sf-02-pick.png"))
         # threshold up: the fence should retreat to cores
         pg.locator(".sf-thr").fill("4"); pg.locator(".sf-thr").dispatch_event("input")
@@ -49,6 +49,9 @@ try:
         for rule in ("any", "all", "majority"):
             pg.select_option(".sf-rule", rule); time.sleep(1.2)
             print(f"ruler {rule}:", pg.locator(".sf-ruler").inner_text().replace("\n", " | "))
+        if pg.locator(".sf-csi").count():
+            time.sleep(1.5)
+            print("match:", pg.locator(".sf-csi").inner_text(), "|", pg.locator(".sf-podfar").inner_text(), "|", pg.locator(".sf-hmf").inner_text())
         pg.screenshot(path=str(SHOTS / "sf-04-majority.png"))
         # frame stepping cost, fence on and off
         STEP = """async b => { const raf = () => new Promise(r => requestAnimationFrame(r)); await raf();

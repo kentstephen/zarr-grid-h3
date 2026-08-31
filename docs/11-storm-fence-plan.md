@@ -236,3 +236,138 @@ Fix directions (not yet applied):
 Direction chosen (Stephen, 2026-08-31): hexes for longer windows in
 general; raster stays the short-window look. Shape TBD between the
 window-size switch and an explicit toggle.
+
+## Hexified (2026-08-31, storm-fence-hex.py)
+
+Direction 3 built as a SEPARATE notebook (the raster stays the short-window look
+in storm-fence.py; the copy answers the toggle question by being two files).
+Goal it serves (Stephen): surgical windows on the 2024 hurricane season, watched
+as a timelapse with the fence as the live analytic; season-scale daily
+aggregates are a later layer on the same carrier.
+
+- Field: MRMS res 7 cell means (~5 px per cell, no holes; HRRR at res 7 would
+  have holes, ~9 km2 px vs ~5 km2 cells, which is also why the fence stays at
+  res 6). Rendered as one SolidPolygonLayer with per-vertex colours, the
+  hex-waves binary carrier: closed rings + ring starts + uint64 cells.
+- Fence rules kept EXACT without shipping HRRR pixel-hours: per res 6 cell per
+  hour the kernel ships order statistics (any = max, majority = the
+  floor(n/2)+1-th largest, all = min; no-data counts as never-wet, matching the
+  raster's browser rule) plus the cell mean for the pick chart. q is monotone
+  in mm/h so the statistics commute with the quantisation.
+- Fence is silver now (205,210,216); the yellow accent moved to the pick ring.
+- Window cap computed, not advertised: largest single trait (frames, K7
+  bytes/frame) against the measured V8 cap. 34 days at the default box.
+
+Flown, default box, LIVE 2 days (39 common frames): 469,609 res 7 cells,
+3,287,779 verts, boot 26.5 s (raster: 72 s), 38 MB to the browser (raster:
+132 MB), paint 7-22 ms, fence step 1-7 ms, frame step ~386 ms headless
+software GL (raster: ~1.3 s). THE PROOF: fence counts at 1 mm/h are 634
+majority / 1,033 any / 502 all, bit-identical to the raster notebook's flown
+numbers; the planes reproduce the pixel rule, not approximate it.
+
+Flown, Helene (2024-09-24..29 fixed, 144 frames, past the raster's 6-day
+wall): boot 34.8 s, 113 MB, majority fence 1,447 cells at 1 mm/h, 438 at
+4 mm/h, zero errors. Shots in shots/helene/.
+
+Costs and opens: cell means smooth convective cores (the thesis's price;
+judge on screen vs the raster). wet% is now cell-mean-based, px-weighted.
+The forecast fence (f24/f48 vs the radar truth, the 2024-season story) still
+needs the forecast-48h store; this notebook joins ANALYSIS to radar.
+
+### Round 2: the season stage (2026-08-31)
+
+- BOX widened to (-100, 24, -75, 41): gulf, ALL of Florida (the old east edge
+  clipped the peninsula mid-state), the seaboard. Default window is the bad
+  stretch, 2024-09-19 to 2024-10-16 (Helene forms to Milton exits, 28 days).
+- Frames escape the V8 cap a second way: the per-window frame block ships as
+  four part-traits (frames0..frames3, split on the hour axis, concatenated in
+  the browser and validated against nf in config). Cap is per trait, so 4x
+  headroom; computed limit is now 75 days at the wide box.
+- Match panel (right HUD): contingency per res 6 cell per hour, radar
+  membership decided by the SAME any/majority/all rule over the cell's res 7
+  children (px-weighted via cnt7), scored only where radar reports. CSI, POD,
+  FAR for the current hour plus a clickable window series (recomputed 250 ms
+  after threshold/rule settles). Series colours are white/silver + yellow
+  (protan-safe, no red).
+- Both HUDs collapse to small buttons (keys H and M). Ruler moved to a
+  bottom-right card, off the basemap text.
+
+### Round 3: vector basemap (2026-08-31)
+
+- Basemap is now OpenFreeMap Dark (https://tiles.openfreemap.org/styles/dark):
+  keyless, no registration, no usage limits, donation-funded. Chosen after
+  CARTO put raster tiles behind an API key; CARTO's keyless vector style was
+  applied first, then swapped out to drop the CARTO dependency entirely.
+- Rendering is maplibre-gl 4.7.1 + deck.gl MapboxOverlay (interleaved), hex /
+  fence / pick layers slotted beforeId under the style's first symbol layer,
+  so place labels draw ABOVE the rain. Picking via map.unproject; TileLayer /
+  BitmapLayer and the raster endpoints are gone from the notebook.
+- Known cosmetic: the style references a circle-11 sprite icon that 404s
+  (console warning only).
+
+Flown, season window (28 days, 672 common frames): 866,693 res 7 cells,
+6,067,916 verts, 990 MB to the browser in part-traits, boot 572.4 s cold
+(MRMS ~142 s + HRRR minutes from S3), paint ~20 ms, fence step 2-5 ms, frame
+step ~444 ms headless software GL. Fence at 1 mm/h: 1,056 majority / 1,608
+any / 831 all cells. Match at the flight's hour: CSI 0.22, POD 0.25, FAR
+0.37 (506 hit / 1,523 miss / 297 false). Shots in shots/season/.
+
+- Viz option (todo): fill the fence cells, opacity driven by the per-cell
+  match (hit/miss/false this hour), so agreement reads as fill strength and
+  stays legible even at full overlap.
+
+### Round 4: legibility (2026-08-31)
+
+- Ruler hidden by default (key R toggles; the harness still reads its text).
+- Collapsed HUDs shrink-wrap so their buttons pin to the actual corners; the
+  match panel's collapsed button is a minimal arrow.
+- Match chart: 120 px tall, raw hourly lines faint under 7-hour centred
+  means; CSI bold white, POD blue (#6db1f2), FAR yellow. Protan-safe.
+
+### Round 5: the widest SE stage, compressed (2026-08-31)
+
+- BOX = (-100, 20, -60, 41): the data's own edges for the southeast AOI.
+  MRMS ends at lat 20 / lon -60; the HRRR cone at 21.1 / -60.9, so the far
+  south-east fill shows radar with no fence, which is honest. Probed
+  alternatives on record: N 46 adds ~20% cells; W -105 ~35%.
+- Every binary trait ships GZIPPED (level 2). Config goes first carrying the
+  compressed part lengths; the browser decodes exactly once, when the last
+  part lands and every length matches, streaming through
+  DecompressionStream("gzip") straight into ONE preallocated array. No
+  concatenation copy, no transient duplicates; the widget model retains tens
+  of MB, not a GB.
+- The window cap is no longer the V8 string cap (compressed bytes never
+  bind): it is a 3 GB decoded-memory budget, frames (K7 B/frame) + four
+  planes (K B/frame). 52 days at this box.
+
+Flown, season window at the wide box: 1,575,938 res 7 cells, 11,033,859
+verts, 197,993 fence cells, 672 frames, 1,591 MB decoded in the browser,
+boot 184.9 s (was 572.4 s uncompressed at the SMALLER box: compression cut
+the wire time), paint ~34 ms, fence step 3-6 ms, frame step ~488 ms headless
+software GL. Fence at 1 mm/h: 1,912 majority / 2,691 any / 1,576 all. Match
+at the flight's hour: CSI 0.34, POD 0.37, FAR 0.19 (1,556 / 2,695 / 354).
+Known wording debt: the note still says "MB to the browser" for the decoded
+size; the wire is now far smaller.
+- Fill colour (todo): try orange for the match fill (silver competes with
+  the blues ramp's white top end; blue-vs-orange is the protan-safe axis;
+  ~rgb(235,140,60) sits between the ramp and the yellow pick accent).
+
+### Round 6: the fill (2026-08-31)
+
+The match made spatial, per Stephen's concept: each fence cell's area filled
+silver, opacity = the px-weighted share of the cell's REPORTING radar at or
+above the threshold this hour (max ~0.59 so the storm reads through). A full
+pen is solid-ish silver, a marginal one a faint wash, a false alarm an empty
+pen; misses have no pen by construction. Second SolidPolygonLayer over the
+field, under the fence lines, reusing the vertex carrier with silver RGB
+baked and alpha painted per frame. `fill` button + key V, default ON; no
+speed gating yet (wake/decay and pause-gating discussed, on the table).
+
+Flown: booted 225.8 s, fill costs a second alpha pass over 11M verts, frame
+step ~1,046 ms headless software GL (was ~488; real GPUs will care much
+less, and the pass only runs while the fill is on). Match numbers unchanged
+(CSI 0.34 · POD 0.37 · FAR 0.19): the fill is a view, not a new statistic.
+
+Round 6 amendment: the fill is ORANGE now (235,140,60; the protan-safe
+complement of the blues ramp, per Stephen), alpha cap 180/255. The storm's
+luminance detail stays readable through a full match.
