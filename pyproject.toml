@@ -5,6 +5,7 @@ description = "H3 traversal over a native Zarr grid: the raster is drawn, H3 is 
 requires-python = ">=3.13"
 dependencies = [
     "anywidget>=0.9",
+    "async-geotiff>=0.4",
     "duckdb>=1.5.5",
     "h3>=4.5.0",
     "h3ronpy>=0.22.0",
@@ -13,8 +14,10 @@ dependencies = [
     "matplotlib>=3.11.1",
     "numpy==2.5.1",
     "obstore>=0.9.2",
+    "pillow>=12.3.0",
     "pyarrow>=25.0.0",
     "pyproj>=3.7",
+    "python-dotenv>=1.2.3",
     "scipy>=1.18.1",
     "xarray",
     "xarray-sql>=0.3.3",
