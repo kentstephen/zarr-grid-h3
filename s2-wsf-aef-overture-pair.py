@@ -1292,6 +1292,17 @@ def _(anywidget, asyncio, traitlets):
           };
           const L = mkPane("left"), R = mkPane("right");
           row.append(L.pane, R.pane);
+          // FOLDING PILL (Stephen, 2026-09-02: "when it's calculating hexagons, I
+          // wanna know that"): on the right map, up the instant a view is sent
+          // past hex zoom, down with the first status that is not a fold
+          const fold = document.createElement("div");
+          fold.className = "sp-fold";
+          fold.textContent = "folding hexagons\u2026";
+          fold.style.cssText = "position:absolute;left:8px;bottom:28px;z-index:6;padding:6px 12px;border-radius:999px;" +
+            "background:rgba(29,29,27,.9);color:#fff;font:600 14px ui-sans-serif,system-ui,sans-serif;letter-spacing:.01em;" +
+            "box-shadow:0 1px 4px rgba(0,0,0,.35);pointer-events:none;animation:sp-pulse 1.1s ease-in-out infinite";
+          fold.hidden = true;
+          R.pane.append(fold);
           const strip = document.createElement("div");
           strip.style.cssText = "display:flex;flex-direction:column;gap:.25rem;padding:.35rem .4rem;background:#fff;color:#222";  // rewritten by paneHeight (stripCss) in full screen
           const status = document.createElement("div");
@@ -1357,6 +1368,7 @@ def _(anywidget, asyncio, traitlets):
           const aefYears = cfg.aef_years || [];
           const sty = document.createElement("style");
           sty.textContent = [
+            "@keyframes sp-pulse{0%,100%{opacity:1}50%{opacity:.55}}",
             ".sp-range{position:relative;width:300px;height:30px}",
             ".sp-range input{position:absolute;left:0;top:0;width:100%;height:22px;margin:0;background:none;pointer-events:none;-webkit-appearance:none;appearance:none}",
             ".sp-range input:focus{outline:none}",
@@ -1614,6 +1626,7 @@ def _(anywidget, asyncio, traitlets):
           // timings and tile counts of a finished fold stay hidden
           const say = (t) => {
             status.textContent = t || "";
+            fold.hidden = !/folding/.test(t || "");
             if (cfg.minimal) status.hidden = !/folding|failed|zoom in past|no match|search:/.test(t || "");
           };
           const renderLegend = () => {
@@ -1788,6 +1801,7 @@ def _(anywidget, asyncio, traitlets):
             v.n = ++seq;
             model.set("view", JSON.stringify(v));
             model.save_changes();
+            if (v.zoom >= (cfg.hex_zoom || 9)) fold.hidden = false;
           }
 
           const cellAt = (lngLat) => {
@@ -2170,7 +2184,7 @@ def _(
                     s_lo, s_hi = fr.get("shift_lo", 0.0), fr.get("shift_hi", 1.0)
                     t = (float(dsp) - s_lo) / max(s_hi - s_lo, 1e-9)
                     if t >= 0.75:
-                        how = "moved <b>a lot</b>"
+                        how = "moved <b>significantly</b>"
                     elif t >= 0.4:
                         how = "moved <b>a fair amount</b>"
                     elif t >= 0.15:
