@@ -121,8 +121,8 @@ def _():
 def _(mo):
     mo.md("""
     [![Open in molab](https://molab.marimo.io/molab-shield.svg)](https://molab.marimo.io/github/github.com/kentstephen/zarr-grid-h3/blob/main/s2-lcms-aef-mtbs-pair.py)
-    <small>the maps may be more responsive run locally:
-    `uv run marimo edit s2-lcms-aef-mtbs-pair.py --sandbox`</small>
+    <small>molab sits next to the data and is the faster place to run this;
+    locally: `uv run marimo edit s2-lcms-aef-mtbs-pair.py --sandbox`</small>
 
     # The S2 hex pair
 
@@ -130,18 +130,30 @@ def _(mo):
     one H3 fill over the same camera. Pan either map and both move. Hover a
     hexagon on either side and its ring is drawn on both.
 
-    - **S2 year** (left header, keys `[` `]`): which mosaic, 2022 to 2024.
-    - **label year** (right header, keys `,` `.`): the LCMS Change layer and
-      the AlphaEarth window around it, 2022 or 2023.
-    - **fill** (right header, keys `1` to `3`): what LCMS says happened · how
-      much the AlphaEarth fingerprint changed · the year it changed.
-    - **MTBS perimeters** on both panes, gold lines for the label year and the
+    - **S2** (left header, keys `[` `]`): which mosaic, 2022 to 2025.
+    - **LCMS** (right header, keys `,` `.`): the LCMS Change layer, 2022 or
+      2023.
+    - **FILL** (keys `1` to `3`): **LCMS says**, what LCMS booked for the
+      hexagon · **AEF changed**, how far the AlphaEarth fingerprint moved
+      between the two ends of the window, on a ramp · **AEF change year**,
+      the first year inside the window the fingerprint jumped past the quiet
+      level, one color per year.
+    - **AEF** (the slider, keys `-` `=` for the from end and `_` `+` for the
+      to end): the AlphaEarth window, whole years 2017 to 2025. Drag either
+      handle; the fold runs when you let go.
+    - **MTBS perimeters** on both panes, gold lines for the LCMS year and the
       year before (key `P` hides them). Hover one and the strip names the fire,
       its ignition date, type and acreage.
-    - Click a hexagon for its row. `L` toggles the basemap labels.
+    - Click a hexagon for its story: what LCMS says, when AlphaEarth saw the
+      ground change, which fire MTBS mapped there. `L` toggles the basemap
+      labels, `F` full screen.
+
+    The two AEF fills read the same numbers. "AEF changed" is the size of the
+    move with no year attached; "AEF change year" is the year and nothing
+    about the size. A hexagon can be bright on one and any year on the other.
 
     The hexagons fold from zoom 9 up. Below it the right pane shows the LCMS
-    raster for the label year and the left keeps the mosaic down to zoom 7.
+    raster for the LCMS year and the left keeps the mosaic down to zoom 7.
     """)
     return
 
