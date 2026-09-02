@@ -194,6 +194,13 @@ def _(os, tempfile):
     }
 
     VIEW_W, VIEW_H = 700, 720  # one pane
+    # the strip under the map, minimal (Stephen, 2026-09-01: "it's kind of like
+    # machine language to me... comment out a lot of that printout"): the
+    # legend, the fire under the pointer and the three-sentence story stay;
+    # the small numbers line under the story, the status line (res, fold
+    # timings, tile counts) and the keys hint are hidden. Flip to bring them
+    # back; the kernel still writes them.
+    STRIP_MINIMAL = True
     PAD = 1.3
     SETTLE = 0.35
     HEX_ZOOM = 9.0
@@ -324,6 +331,7 @@ def _(os, tempfile):
         S2_YEAR0,
         S2_YEARS,
         SETTLE,
+        STRIP_MINIMAL,
         VIEW_H,
         VIEW_W,
         VIRIDIS,
@@ -1192,8 +1200,10 @@ def _(
                     m = when == w
                     if m.any():
                         items.append({"name": when_name[w], "hex": "#%02x%02x%02x" % WHEN_RGB.get(w, (45, 45, 45)), "pct": round(100 * int(m.sum()) / tot, 1)})
-                if not np.isnan(D0):
-                    items.append({"name": f"quiet level D0 {D0:.3f} (the stable cells' {100 * (1 - FA):.0f}th percentile of their largest step)", "hex": "#ffffff"})
+                # the quiet level as a legend line, off with STRIP_MINIMAL (the
+                # status line carries it too): keep it in the ramp's title instead
+                # if not np.isnan(D0):
+                #     items.append({"name": f"quiet level D0 {D0:.3f} (the stable cells' {100 * (1 - FA):.0f}th percentile of their largest step)", "hex": "#ffffff"})
                 return items
             items = []
             cc, cn = np.unique(cls, return_counts=True)
@@ -1335,6 +1345,7 @@ def _(anywidget, asyncio, traitlets):
           fire.className = "sp-fire";
           fire.style.cssText = "font-size:13px;min-height:1.2em;color:#7a5a00";
           strip.append(legend, fire, panel, status);
+          status.hidden = !!cfg.minimal;  // STRIP_MINIMAL: the status line still fills, just not shown
           root.append(row, strip);
           el.append(css, root);
 
@@ -1479,6 +1490,7 @@ def _(anywidget, asyncio, traitlets):
           hint.textContent = "keys: [ ] S2 year · , . label year · 1-3 fill · - = AEF from · _ + AEF to · P perimeters · L labels · F full screen · hover a perimeter for the fire · click a hexagon for its row";
           hint.style.color = "#666";
           strip.appendChild(hint);
+          hint.hidden = !!cfg.minimal;
           const step = (arr, cur, d) => { const i = arr.indexOf(cur); return arr[Math.max(0, Math.min(arr.length - 1, (i < 0 ? 0 : i) + d))]; };
           root.tabIndex = 0;
           root.addEventListener("keydown", (e) => {
@@ -1804,7 +1816,7 @@ def _(anywidget, asyncio, traitlets):
 
 
 @app.cell
-def _(AEF_FROM0, AEF_TO0, AEF_YEARS_ALL, FILLS, FILL_NAMES, FILL_SHORT, HEX_ZOOM, HOME, LABELS_SLOT, LABEL_YEAR0, LABEL_YEARS, MTBS_LAYER, MTBS_PMTILES, PairMap, RASTER_TILE, S2_YEAR0, S2_YEARS, VIEW_H, json, lc_bounds):
+def _(AEF_FROM0, AEF_TO0, AEF_YEARS_ALL, FILLS, FILL_NAMES, FILL_SHORT, HEX_ZOOM, HOME, LABELS_SLOT, LABEL_YEAR0, LABEL_YEARS, MTBS_LAYER, MTBS_PMTILES, PairMap, RASTER_TILE, S2_YEAR0, S2_YEARS, STRIP_MINIMAL, VIEW_H, json, lc_bounds):
     # ---- the map: built ONCE, empty; never re-runs for a parameter ---------------
     pair = PairMap(config=json.dumps({
         "height": VIEW_H, "home": dict(HOME), "labels": True, "labels_slot": LABELS_SLOT, "tile": RASTER_TILE,
@@ -1814,6 +1826,7 @@ def _(AEF_FROM0, AEF_TO0, AEF_YEARS_ALL, FILLS, FILL_NAMES, FILL_SHORT, HEX_ZOOM
         "fills": [[f, FILL_SHORT[f], FILL_NAMES[f]] for f in FILLS],
         "hex_zoom": HEX_ZOOM, "extent": list(lc_bounds),
         "perims": True, "perims_src": MTBS_PMTILES, "perims_layer": MTBS_LAYER,
+        "minimal": STRIP_MINIMAL,
     }))
     HOLD = {
         "frame": None, "sent": None, "box": None, "res": None, "vs": None,
@@ -1841,6 +1854,7 @@ def _(
     MTBS_FOLD_YEARS,
     S2_YEARS,
     SETTLE,
+    STRIP_MINIMAL,
     aef_fold,
     asyncio,
     build_frame,
@@ -2109,7 +2123,7 @@ def _(
                 )
                 pair.panel = (
                     f"<div style='font-size:14px;line-height:1.5'>{l1}<br>{l2}<br>{l3}</div>"
-                    f"<div style='font-size:12px;color:#777'>{detail}</div>"
+                    + ("" if STRIP_MINIMAL else f"<div style='font-size:12px;color:#777'>{detail}</div>")
                 )
         except Exception as e:
             pair.panel = f"<span style='opacity:.7'>click: {e}</span>"
