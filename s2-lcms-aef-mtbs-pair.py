@@ -1337,17 +1337,17 @@ def _(anywidget, asyncio, traitlets):
           strip.style.cssText = "display:flex;flex-direction:column;gap:.25rem;padding:.35rem .4rem;background:#fff;color:#222";  // rewritten by paneHeight (stripCss) in full screen
           const status = document.createElement("div");
           status.className = "sp-status";
-          status.style.cssText = mono + ";color:#444;white-space:pre-wrap";
+          status.style.cssText = "font:14px ui-sans-serif,system-ui,sans-serif;color:#444;white-space:pre-wrap";
           const legend = document.createElement("div");
           legend.className = "sp-legend";
-          legend.style.cssText = "display:flex;flex-wrap:wrap;gap:.3rem .9rem;align-items:center";
+          legend.style.cssText = "display:flex;flex-wrap:wrap;gap:.3rem .9rem;align-items:center;font-size:14px";
           const panel = document.createElement("div");
           panel.className = "sp-panel";
-          panel.style.cssText = "font-size:13px";
+          panel.style.cssText = "font-size:14px";
           // the fire under the pointer (the perimeter's own attributes, no kernel)
           const fire = document.createElement("div");
           fire.className = "sp-fire";
-          fire.style.cssText = "font-size:13px;min-height:1.2em;color:#7a5a00";
+          fire.style.cssText = "font-size:14px;min-height:1.2em;color:#7a5a00";
           strip.append(legend, fire, panel, status);
           status.hidden = !!cfg.minimal;  // STRIP_MINIMAL: see say()
           root.append(row, strip);
@@ -1392,7 +1392,7 @@ def _(anywidget, asyncio, traitlets):
           const styleS2 = mkGroup(L.head, "S2", cfg.s2_years || [], () => s2y, (v) => { s2y = v; }, "s2", "sp-s2y");
           const styleLy = mkGroup(R.head, "LCMS", cfg.label_years || [], () => ly, (v) => { ly = v; }, "label", "sp-ly");
           const fills = (cfg.fills || []).map((f) => ({value: f[0], label: f[1], title: f[2]}));
-          rowBreak(R.head);
+          // LCMS and FILL share the first row, the AEF slider has the second (Stephen, 2026-09-01: "two lines instead of 3")
           const styleFill = mkGroup(R.head, "fill", fills, () => fill, (v) => { fill = v; }, "fill", "sp-fill");
           // the AlphaEarth window: a stepped two-handle slider (Stephen,
           // 2026-09-01: "simple and intuitive... a stepped two way slider").
@@ -1529,13 +1529,13 @@ def _(anywidget, asyncio, traitlets):
               s.style.cssText = "display:inline-flex;align-items:center;gap:.35rem";
               if (it.ramp) {
                 const bar = document.createElement("span");
-                bar.style.cssText = "display:inline-block;width:9rem;height:10px;border-radius:2px;background:linear-gradient(90deg," + it.ramp.join(",") + ")";
+                bar.style.cssText = "display:inline-block;width:11rem;height:12px;border-radius:2px;background:linear-gradient(90deg," + it.ramp.join(",") + ")";
                 const lo = document.createElement("span"); lo.textContent = it.lo; lo.style.opacity = ".75";
                 const hi = document.createElement("span"); hi.textContent = it.hi; hi.style.opacity = ".75";
                 s.append(lo, bar, hi); s.title = it.title || "";
               } else {
                 const chip = document.createElement("span");
-                chip.style.cssText = "display:inline-block;width:10px;height:10px;border-radius:2px;background:" + it.hex;
+                chip.style.cssText = "display:inline-block;width:12px;height:12px;border-radius:2px;background:" + it.hex;
                 const t = document.createElement("span"); t.textContent = it.name + (it.pct != null ? " " + it.pct + "%" : "");
                 s.append(chip, t);
               }
@@ -1962,7 +1962,8 @@ def _(
                 return
         res = res_for_view(vsd, box)
         ly, y0, y1 = HOLD["ly"], HOLD["y0"], HOLD["y1"]
-        key = (ly, y0, y1, res, tuple(round(v, 3) for v in box))
+        rbox = tuple(round(v, 3) for v in box)
+        key = (ly, y0, y1, res, rbox)
         t0 = time.time()
         years = list(range(y0, y1 + 1))
         _say(f"folding LCMS {ly} and AlphaEarth {y0} to {y1} ({len(years)} years)…" if STRIP_MINIMAL
@@ -1970,7 +1971,7 @@ def _(
         if key in HOLD["memo"]:
             fr, stats = HOLD["memo"][key]
         else:
-            bkey = (res, key[2])
+            bkey = (res, rbox)  # the fold cache is per res and BOX (2026-09-01: key[2] became y1 when the window joined the key, and every pan reused the first box's AEF fold)
             need = [y for y in years if (y, bkey) not in HOLD["aef"]]
             myears = [ly + d for d in MTBS_FOLD_YEARS]
             mneed = [y for y in myears if (y, bkey) not in HOLD["mtbs"]]
