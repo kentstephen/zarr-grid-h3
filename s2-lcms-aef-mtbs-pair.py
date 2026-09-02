@@ -1349,7 +1349,7 @@ def _(anywidget, asyncio, traitlets):
           fire.className = "sp-fire";
           fire.style.cssText = "font-size:13px;min-height:1.2em;color:#7a5a00";
           strip.append(legend, fire, panel, status);
-          status.hidden = !!cfg.minimal;  // STRIP_MINIMAL: the status line still fills, just not shown
+          status.hidden = !!cfg.minimal;  // STRIP_MINIMAL: see say()
           root.append(row, strip);
           el.append(css, root);
 
@@ -1512,7 +1512,14 @@ def _(anywidget, asyncio, traitlets):
             e.preventDefault();
           });
 
-          const say = (t) => { status.textContent = t || ""; };
+          // STRIP_MINIMAL: the status line shows only while a fold is running,
+          // after a failure, or when the hexagons are off for zoom (Stephen,
+          // 2026-09-01: "we need some status like folding if it is"); the
+          // timings and tile counts of a finished fold stay hidden
+          const say = (t) => {
+            status.textContent = t || "";
+            if (cfg.minimal) status.hidden = !/folding|failed|zoom in past/.test(t || "");
+          };
           const renderLegend = () => {
             legend.replaceChildren();
             let items = [];
@@ -1958,7 +1965,8 @@ def _(
         key = (ly, y0, y1, res, tuple(round(v, 3) for v in box))
         t0 = time.time()
         years = list(range(y0, y1 + 1))
-        _say(f"res {res} · folding LCMS {ly}, AlphaEarth {y0}..{y1} ({len(years)} years)… (wiring run {HOLD['runs']})")
+        _say(f"folding LCMS {ly} and AlphaEarth {y0} to {y1} ({len(years)} years)…" if STRIP_MINIMAL
+             else f"res {res} · folding LCMS {ly}, AlphaEarth {y0}..{y1} ({len(years)} years)… (wiring run {HOLD['runs']})")
         if key in HOLD["memo"]:
             fr, stats = HOLD["memo"][key]
         else:
@@ -2025,7 +2033,9 @@ def _(
                 force, HOLD["pending"], HOLD["pending_force"] = HOLD["pending_force"], None, False
                 settle = False
         except Exception as exc:
-            _say(f"failed: {type(exc).__name__}: {exc}")
+            tb = traceback.extract_tb(exc.__traceback__)
+            where = f" (line {tb[-1].lineno})" if tb else ""
+            _say(f"failed: {type(exc).__name__}: {exc}{where}")
             raise
         finally:
             HOLD["busy"], HOLD["pending"], HOLD["pending_force"] = False, None, False
