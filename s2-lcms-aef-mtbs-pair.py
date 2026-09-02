@@ -20,13 +20,13 @@
 """S2 x LCMS x AEF x MTBS: the ground as a picture beside one H3 fill, one camera.
 
 Two maps in one widget. LEFT: Earth Genome's Sentinel-2 yearly mosaic (true
-color, 2022-2024) as tiles the kernel renders from the COGs; it is never
+color, 2022-2025) as tiles the kernel renders from the COGs; it is never
 covered. RIGHT: one opaque H3 fill per hexagon over the same camera: the USFS
-LCMS Change class for the label year (2022 or 2023, the overlap of the three
-sources), the AlphaEarth displacement (1 - cos between the cell's mean 64-vector
-in consecutive years, the largest step in Y-2..Y+1, on viridis), or WHEN the
-embedding first moved past the view's stable baseline (the year, or never), or
-MTBS burn severity (the observational record of what burned, folded for the
+LCMS Change class for the label year (2022 or 2023), the AlphaEarth
+displacement between the two ends of a window YOU set (1 - cos between the
+cell's mean 64-vector in the from year and the to year, on viridis), or WHEN
+inside that window the embedding first moved past the view's stable baseline
+(the year, or never), or MTBS burn severity (the observational record of what burned, folded for the
 label year and the year before, since MTBS books the burn year and LCMS the
 year it shows). MTBS fire perimeters ride on BOTH panes as a line (the label
 year solid, the year before dashed) from the PMTiles on source.coop.
@@ -145,14 +145,16 @@ def _(mo):
 @app.cell
 def _(os, tempfile):
     # ---- constants ----------------------------------------------------------
-    # The years are the OVERLAP of the three sources (Stephen, 2026-09-01: "just
-    # keep the overlapping years"): LCMS Change 1999-2023 less 2016, Sentinel-2
-    # yearly mosaics 2022-2024, AlphaEarth 2017-2025. A label year needs its
-    # AEF window (Y-2..Y+1) and a mosaic of its own, so 2022 and 2023.
+    # Each source offers what it has (Stephen, 2026-09-01: "it'd be nice just to
+    # set the window for the years"): LCMS Change 2022 and 2023 (the years a
+    # mosaic exists for), Sentinel-2 yearly mosaics 2022-2025 (2025 is in the
+    # bucket, not yet in the STAC), AlphaEarth 2017-2025. The AEF window is its
+    # own control, a from year and a to year; it no longer hangs off the label
+    # year. It opens at 2020..2023 (what the old Y-2..Y+1 window was for 2022).
     LABEL_YEARS = (2022, 2023)
-    S2_YEARS = (2022, 2023, 2024)
-    AEF_WINDOW = (-2, -1, 0, 1)
-    AEF_YEARS_ALL = tuple(sorted({y + d for y in LABEL_YEARS for d in AEF_WINDOW}))  # 2020..2024
+    S2_YEARS = (2022, 2023, 2024, 2025)
+    AEF_YEARS_ALL = tuple(range(2017, 2026))
+    AEF_FROM0, AEF_TO0 = 2020, 2023
     LABEL_YEAR0, S2_YEAR0 = 2022, 2022
 
     # The zoom -> H3 ladder: BASE_RES at ZOOM0, one step finer every PER_RES zoom
@@ -255,16 +257,22 @@ def _(os, tempfile):
         16: ("Non-Processing Area Mask", (245, 245, 245)),
     }
     # the `when` fill: the first step whose displacement is above D0. Step 0 is
-    # Y-2 -> Y-1 (moved by Y-1), 1 is Y-1 -> Y (by Y), 2 is Y -> Y+1 (by Y+1).
-    WHEN_RGB = {0: (0, 114, 178), 1: (230, 159, 0), 2: (204, 121, 167), -1: (222, 222, 222), -2: (150, 150, 150)}
+    # keyed by the YEAR the embedding first moved (the step ending in that
+    # year); 2021 blue / 2022 orange / 2023 purple as before, the rest from
+    # Okabe-Ito less the red, plus a brown and a near-black. -1 never, -2 no
+    # embedding. No red, nothing hangs on red vs green.
+    WHEN_RGB = {2018: (86, 180, 233), 2019: (0, 158, 115), 2020: (240, 228, 66), 2021: (0, 114, 178),
+                2022: (230, 159, 0), 2023: (204, 121, 167), 2024: (140, 86, 75), 2025: (45, 45, 45),
+                -1: (222, 222, 222), -2: (150, 150, 150)}
     return (
         AEF_INDEX_URL,
         AEF_LEVEL_FOR_RES,
         AEF_MAX_FILES,
         AEF_NODATA,
         AEF_PREFIX,
+        AEF_FROM0,
         AEF_RES,
-        AEF_WINDOW,
+        AEF_TO0,
         AEF_X0,
         AEF_Y0,
         AEF_YEARS_ALL,
@@ -602,8 +610,8 @@ async def _(
     xr,
 ):
     # ---- AlphaEarth: the COG overviews (mosaic past res 10), one fold per year --
-    # `aef_fold(box, res, year)` for any year in AEF_YEARS_ALL (2020..2024, the
-    # union of both label years' windows); each year has its own COG index
+    # `aef_fold(box, res, year)` for any year in AEF_YEARS_ALL (2017..2025, the
+    # whole run; the window control picks from them); each year has its own COG index
     # slice (cached as parquet under tmp) and its own mosaic time index.
     _store = S3Store("us-west-2.opendata.source.coop", region="us-west-2", skip_signature=True)
     _mstore = S3Store("us-west-2.opendata.source.coop", region="us-west-2", skip_signature=True, prefix=AEF_PREFIX)
@@ -797,13 +805,31 @@ def _(
                     continue
                 _items[f["id"]] = {"tci": f["assets"]["TCI"]["href"].split("source.coop/")[1], "bbox": f.get("bbox")}
                 ids.append(f["id"])
+            if not ids and feats:
+                # the STAC lags the bucket (2025 is there for every tile round
+                # Dixie, uploaded 2026-01-31, and the search does not know it):
+                # the same MGRS tile's path with the year swapped, the sibling's
+                # bbox; a tile that is not there reads as empty, not an error
+                seen = set()
+                for f in feats:
+                    tile = f["id"].split("_")[0]
+                    if tile in seen:
+                        continue
+                    seen.add(tile)
+                    iid = f"{tile}_{year}-01-01_{year + 1}-01-01"
+                    base = f["assets"]["TCI"]["href"].split("source.coop/")[1].rsplit("/", 2)[0]
+                    _items[iid] = {"tci": f"{base}/{iid}/TCI.tif", "bbox": f.get("bbox")}
+                    ids.append(iid)
             _boxes[key] = ids
         return _boxes[key]
 
     async def _get(rel):
         if rel not in _open:
             async with _sem:
-                _open[rel] = await GeoTIFF.open(rel, store=_store)
+                try:
+                    _open[rel] = await GeoTIFF.open(rel, store=_store)
+                except Exception:
+                    _open[rel] = None  # not in the bucket (a synthesized year): empty
         return _open[rel]
 
     def _tile_ll(z, x, y):
@@ -848,6 +874,8 @@ def _(
         li = min(S2_TCI_MAX_Z - z, S2_TCI_MAX_Z - S2_PYRAMID_Z)  # L5 (306 m) below z9: decimated
         for iid in ids:
             g = await _get(_items[iid]["tci"])
+            if g is None:
+                continue
             lv = [g, *g.overviews][li]
             L, _B, R_, Tt = g.bounds
             H, W = lv.shape
@@ -988,7 +1016,6 @@ def _(
 
 @app.cell
 def _(
-    AEF_WINDOW,
     ALPHA_FILL,
     ALPHA_QUIET,
     CHG_MIN,
@@ -1013,17 +1040,18 @@ def _(
     con.execute("INSTALL h3 FROM community; LOAD h3")
     _E = [f"e{i:02d}" for i in range(64)]
     _GREY = np.array([128, 128, 128], np.uint8)
-    STEP_NAMES = ("pre", "in", "out")
 
-    def build_frame(lc_cells, aef_by_year, year, mtbs_by_year=None):
-        """Join the label year's LCMS fold with each AlphaEarth year in its window
-        (LEFT: a cell keeps its LCMS word with or without an embedding); the
-        displacement per consecutive pair (1 - cos), the largest kept; D0 from
-        the view's stable cells; `when` = the first step above D0. The MTBS
-        folds (the label year and the year before) join the same way; a cell
-        burned in both keeps the later year."""
+    def build_frame(lc_cells, aef_by_year, y0, y1, mtbs_by_year=None):
+        """Join the label year's LCMS fold with each AlphaEarth year in the window
+        y0..y1 (LEFT: a cell keeps its LCMS word with or without an embedding).
+        `disp` is the displacement between the two ENDS (1 - cos of the y0 and
+        y1 vectors): the "AEF changed" fill. The consecutive steps inside the
+        window give D0 (the stable cells' quantile of their largest step) and
+        `when`, the year of the first step above D0: the "AEF change year"
+        fill. The MTBS folds join the same way; a cell burned in both keeps the
+        later year."""
         con.register("lc_cells", lc_cells)
-        years = [y for y in (year + d for d in AEF_WINDOW) if aef_by_year.get(y) is not None]
+        years = [y for y in range(y0, y1 + 1) if aef_by_year.get(y) is not None]
         sel = ["l.*"]
         joins = []
         for y in years:
@@ -1058,36 +1086,41 @@ def _(
             V[~np.isfinite(nrm) | (nrm == 0)] = np.nan
             return V
 
-        # step k compares year+k-2 with year+k-1 (k = 0 pre, 1 in, 2 out)
-        steps = np.full((3, n), np.nan, np.float32)
+        # step k compares years[k] with years[k+1] (consecutive years present)
         Vs = {y: _V(y) for y in years} if n else {}
-        for k in range(3):
-            ya, yb = year + AEF_WINDOW[k], year + AEF_WINDOW[k + 1]
-            if ya in Vs and yb in Vs:
-                steps[k] = (1.0 - np.einsum("ij,ij->i", Vs[ya], Vs[yb])).astype(np.float32)
+        step_years = [(years[k], years[k + 1]) for k in range(len(years) - 1)]
+        steps = np.full((max(1, len(step_years)), n), np.nan, np.float32)
+        for k, (ya, yb) in enumerate(step_years):
+            steps[k] = (1.0 - np.einsum("ij,ij->i", Vs[ya], Vs[yb])).astype(np.float32)
+        # the ends: what the fingerprint did between y0 and y1, whatever the path
+        if y0 in Vs and y1 in Vs and y0 != y1:
+            disp = (1.0 - np.einsum("ij,ij->i", Vs[y0], Vs[y1])).astype(np.float32)
+        else:
+            disp = np.full(n, np.nan, np.float32)
         import warnings
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)
-            disp = np.nanmax(steps, axis=0) if n else np.zeros(0, np.float32)
+            disp_max = np.nanmax(steps, axis=0) if n else np.zeros(0, np.float32)
         scored = ~np.isnan(disp)
-        stable_ok = scored & ~says
+        stepped = ~np.isnan(disp_max)
+        stable_ok = stepped & ~says
         when = np.full(n, -2, np.int64)  # unscored
         if stable_ok.sum() >= MIN_STABLE_CELLS:
-            ds = disp[stable_ok].astype(np.float64)
+            ds = disp_max[stable_ok].astype(np.float64)
             D0 = float(np.quantile(ds, 1 - FA))
             above = steps > D0  # NaN > D0 is False
             first = above.argmax(axis=0)
-            when = np.where(above.any(axis=0), first, np.where(scored, -1, -2)).astype(np.int64)
+            yrs = np.array([yb for _, yb in step_years] or [-1], np.int64)
+            when = np.where(above.any(axis=0), yrs[first], np.where(stepped, -1, -2)).astype(np.int64)
         else:
             D0 = float("nan")
         moved = when >= 0
         when_name = {
-            0: f"AlphaEarth changed in {year - 1} (its {year - 2} vs {year - 1} fingerprints)",
-            1: f"AlphaEarth changed in {year} (its {year - 1} vs {year} fingerprints)",
-            2: f"AlphaEarth changed in {year + 1} (its {year} vs {year + 1} fingerprints)",
-            -1: "AlphaEarth saw no change (every step under the quiet level)",
+            -1: f"AlphaEarth saw no change {y0} to {y1} (every step under the quiet level)",
             -2: "no AlphaEarth embedding here",
         }
+        for ya, yb in step_years:
+            when_name[yb] = f"AlphaEarth changed in {yb} (its {ya} vs {yb} fingerprints)"
         cells = pa.table({
             "cell": j["cell"],
             "cls": pa.array(cls.astype(np.uint8)),
@@ -1097,11 +1130,10 @@ def _(
             "p_chg": pa.array(p_chg),
             "purity": j["purity"],
             "disp": pa.array(disp.astype(np.float32)),
-            "disp_pre": pa.array(steps[0]),
-            "disp_in": pa.array(steps[1]),
-            "disp_out": pa.array(steps[2]),
+            "disp_max": pa.array(disp_max.astype(np.float32)),
+            **{f"step_{yb}": pa.array(steps[k]) for k, (_, yb) in enumerate(step_years)},
             "moved": pa.array(moved),
-            "when": pa.array(when.astype(np.int8)),
+            "when": pa.array(when.astype(np.int16)),
             "when_name": pa.array([when_name[int(w)] for w in when]),
             "mtbs_sev": pa.array(mtbs_sev.astype(np.int8)),
             "mtbs_name": pa.array([MTBS_CLASSES.get(int(v), ("not mapped burned",))[0] for v in mtbs_sev]),
@@ -1118,7 +1150,7 @@ def _(
         rgb_cls = np.array([CLASSES.get(int(c), ("?", (128, 128, 128)))[1] for c in cls], np.uint8)
         _t = np.clip((np.where(scored, disp, lo) - lo) / (hi - lo), 0, 1)
         rgb_shift = np.where(scored[:, None], RAMP[(_t * 255).round().astype(np.int64)], _GREY).astype(np.uint8)
-        rgb_when = np.array([WHEN_RGB[int(w)] for w in when], np.uint8) if n else np.zeros((0, 3), np.uint8)
+        rgb_when = np.array([WHEN_RGB.get(int(w), (45, 45, 45)) for w in when], np.uint8) if n else np.zeros((0, 3), np.uint8)
         rgb_mtbs = np.array([MTBS_CLASSES.get(int(v), ("?", (222, 222, 222)))[1] for v in mtbs_sev], np.uint8) if n else np.zeros((0, 3), np.uint8)
         burned = mtbs_sev > 0
 
@@ -1152,15 +1184,16 @@ def _(
                     items.append({"name": "no MTBS burn in this view for these years", "hex": "#dedede"})
                 return items
             if kind == "shift":
-                return [{"ramp": RAMP_HEX, "lo": f"shift {lo:.3f}", "hi": f"{hi:.3f}",
-                         "title": "1 - cos between the cell's AlphaEarth vectors in consecutive years, the largest of the three steps, stretched to this view's p2-p98"
-                                  + (f"; D0 (the stable cells' {100 * (1 - FA):.0f}th percentile) is {D0:.3f}" if not np.isnan(D0) else "")}]
+                return [{"ramp": RAMP_HEX, "lo": f"{y0} to {y1} shift {lo:.3f}", "hi": f"{hi:.3f}",
+                         "title": f"1 - cos between the cell's AlphaEarth vectors in {y0} and {y1} (the two ends of the window, whatever happened between), stretched to this view's p2-p98"}]
             if kind == "when":
                 items = []
-                for w in (0, 1, 2, -1, -2):
+                for w in [yb for _, yb in step_years] + [-1, -2]:
                     m = when == w
                     if m.any():
-                        items.append({"name": when_name[w], "hex": "#%02x%02x%02x" % WHEN_RGB[w], "pct": round(100 * int(m.sum()) / tot, 1)})
+                        items.append({"name": when_name[w], "hex": "#%02x%02x%02x" % WHEN_RGB.get(w, (45, 45, 45)), "pct": round(100 * int(m.sum()) / tot, 1)})
+                if not np.isnan(D0):
+                    items.append({"name": f"quiet level D0 {D0:.3f} (the stable cells' {100 * (1 - FA):.0f}th percentile of their largest step)", "hex": "#ffffff"})
                 return items
             items = []
             cc, cn = np.unique(cls, return_counts=True)
@@ -1171,10 +1204,11 @@ def _(
 
         n_moved = int(moved.sum())
         score = (
-            f"D0 {D0:.3f} · {n_moved:,} of {int(scored.sum()):,} scored cells moved" if not np.isnan(D0)
-            else "unscored (no embedding, or too few stable cells)"
+            f"AEF {y0}..{y1} · D0 {D0:.3f} · {n_moved:,} of {int(stepped.sum()):,} scored cells moved" if not np.isnan(D0)
+            else f"AEF {y0}..{y1} unscored (no embedding, one year only, or too few stable cells)"
         )
         return {"cells": cells, "cellid": cellid, "cls": cls, "disp": disp, "when": when, "years": years,
+                "y0": y0, "y1": y1, "steps": steps, "step_years": step_years,
                 "D0": D0, "fill": fill, "legend": legend, "score": score, "n_burned": int(burned.sum())}
 
     return build_frame, con
@@ -1286,7 +1320,7 @@ def _(anywidget, asyncio, traitlets):
           const L = mkPane("left"), R = mkPane("right");
           row.append(L.pane, R.pane);
           const strip = document.createElement("div");
-          strip.style.cssText = "display:flex;flex-direction:column;gap:.25rem;padding:.35rem .4rem;background:#fff;color:#222";
+          strip.style.cssText = "display:flex;flex-direction:column;gap:.25rem;padding:.35rem .4rem;background:#fff;color:#222";  // rewritten by paneHeight (stripCss) in full screen
           const status = document.createElement("div");
           status.className = "sp-status";
           status.style.cssText = mono + ";color:#444;white-space:pre-wrap";
@@ -1310,12 +1344,13 @@ def _(anywidget, asyncio, traitlets):
           const onCss = (b, on) => { b.style.background = on ? ACCENT : "transparent"; b.style.color = on ? "#fff" : "#1d1d1b"; };
           let s2y = cfg.s2_year, ly = cfg.label_year, fill = cfg.fill || "lcms", labelsOn = cfg.labels !== false;
           let perimsOn = cfg.perims !== false;
+          let y0 = cfg.aef_from, y1 = cfg.aef_to;
           const send = (act) => {
-            model.set("ctl", JSON.stringify({act, s2y, ly, fill, labels: labelsOn, perims: perimsOn, n: Date.now()}));
+            model.set("ctl", JSON.stringify({act, s2y, ly, fill, y0, y1, labels: labelsOn, perims: perimsOn, n: Date.now()}));
             model.save_changes();
           };
           // an eyebrow label + a segmented control (joined buttons, one border)
-          const mkGroup = (head, title, values, get, set, act, cls) => {
+          const mkGroup = (head, title, values, get, set, act, cls, isOn) => {
             const wrap = document.createElement("span");
             wrap.style.cssText = "display:inline-flex;align-items:center;gap:.4rem";
             const lab = document.createElement("span"); lab.textContent = title;
@@ -1331,7 +1366,7 @@ def _(anywidget, asyncio, traitlets):
             });
             wrap.append(lab, seg);
             rowOf(head).appendChild(wrap);
-            const style = () => btns.forEach((b) => onCss(b, b.dataset.value === String(get())));
+            const style = () => btns.forEach((b) => onCss(b, isOn ? isOn(b) : b.dataset.value === String(get())));
             style();
             return style;
           };
@@ -1344,20 +1379,104 @@ def _(anywidget, asyncio, traitlets):
           const fills = (cfg.fills || []).map((f) => ({value: f[0], label: f[1], title: f[2]}));
           rowBreak(R.head);
           const styleFill = mkGroup(R.head, "fill", fills, () => fill, (v) => { fill = v; }, "fill", "sp-fill");
+          // the AlphaEarth window: a stepped two-handle slider (Stephen,
+          // 2026-09-01: "simple and intuitive... a stepped two way slider").
+          // Two range inputs on one track; the handle you grab moves, the
+          // other stays, and they never cross. The kernel hears the release
+          // (change), not every notch (input), so a drag is one fold.
+          rowBreak(R.head);
+          const aefYears = cfg.aef_years || [];
+          const sty = document.createElement("style");
+          sty.textContent = [
+            ".sp-range{position:relative;width:300px;height:30px}",
+            ".sp-range input{position:absolute;left:0;top:0;width:100%;height:22px;margin:0;background:none;pointer-events:none;-webkit-appearance:none;appearance:none}",
+            ".sp-range input:focus{outline:none}",
+            ".sp-range input::-webkit-slider-runnable-track{background:none;height:22px}",
+            ".sp-range input::-moz-range-track{background:none;height:22px}",
+            ".sp-range input::-webkit-slider-thumb{pointer-events:auto;-webkit-appearance:none;appearance:none;width:16px;height:16px;margin-top:3px;border-radius:50%;background:#2a5db0;border:2px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.35);cursor:grab}",
+            ".sp-range input::-moz-range-thumb{pointer-events:auto;width:12px;height:12px;border-radius:50%;background:#2a5db0;border:2px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.35);cursor:grab}",
+            ".sp-range .trk{position:absolute;left:8px;right:8px;top:9px;height:4px;background:rgba(29,29,27,.22);border-radius:2px}",
+            ".sp-range .spn{position:absolute;top:9px;height:4px;background:#2a5db0;border-radius:2px}",
+            ".sp-range .tks{position:absolute;left:8px;right:8px;top:19px;display:flex;justify-content:space-between;font-size:9px;color:#6b6b68;line-height:1}",
+            ".sp-range .tks span{width:0;display:flex;justify-content:center}",
+          ].join("\n");
+          el.appendChild(sty);
+          const aefWrap = document.createElement("span");
+          aefWrap.style.cssText = "display:inline-flex;align-items:center;gap:.4rem";
+          const aefLab = document.createElement("span"); aefLab.textContent = "AEF";
+          aefLab.style.cssText = "font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#6b6b68";
+          const rng = document.createElement("span"); rng.className = "sp-range";
+          const trk = document.createElement("span"); trk.className = "trk";
+          const spn = document.createElement("span"); spn.className = "spn";
+          const tks = document.createElement("span"); tks.className = "tks";
+          for (const y of aefYears) { const t = document.createElement("span"); const i = document.createElement("i"); i.style.fontStyle = "normal"; i.textContent = String(y); t.appendChild(i); tks.appendChild(t); }
+          const mkRange = () => {
+            const r = document.createElement("input"); r.type = "range"; r.min = 0; r.max = Math.max(0, aefYears.length - 1); r.step = 1;
+            r.title = "AlphaEarth window: drag either end (whole years); release to fold"; return r;
+          };
+          const rFrom = mkRange(), rTo = mkRange();
+          const aefTxt = document.createElement("span");
+          aefTxt.style.cssText = "font-variant-numeric:tabular-nums;min-width:6.5em";
+          rng.append(trk, spn, tks, rFrom, rTo);
+          aefWrap.append(aefLab, rng, aefTxt);
+          rowOf(R.head).appendChild(aefWrap);
+          const styleAef = () => {
+            const i0 = Math.max(0, aefYears.indexOf(y0)), i1 = Math.max(0, aefYears.indexOf(y1)), n = Math.max(1, aefYears.length - 1);
+            rFrom.value = i0; rTo.value = i1;
+            // the higher handle sits on top so it can always be grabbed at the far end
+            rFrom.style.zIndex = i0 === n ? 3 : 2; rTo.style.zIndex = i1 === 0 ? 3 : 2;
+            const usable = rng.clientWidth - 16;
+            spn.style.left = (8 + usable * i0 / n) + "px"; spn.style.width = (usable * (i1 - i0) / n) + "px";
+            aefTxt.textContent = y0 + " to " + y1;
+          };
+          const onDrag = (which) => {
+            let a = Number(rFrom.value), b = Number(rTo.value);
+            if (a >= b) { if (which === "from") a = b - 1; else b = a + 1; }
+            a = Math.max(0, a); b = Math.min(aefYears.length - 1, b);
+            y0 = aefYears[a]; y1 = aefYears[b]; styleAef();
+          };
+          rFrom.addEventListener("input", () => onDrag("from"));
+          rTo.addEventListener("input", () => onDrag("to"));
+          const aefRelease = () => { if (y0 !== aefSent[0] || y1 !== aefSent[1]) { aefSent = [y0, y1]; send("aef"); } };
+          let aefSent = [y0, y1];
+          rFrom.addEventListener("change", aefRelease);
+          rTo.addEventListener("change", aefRelease);
+          setTimeout(styleAef, 0);
+          try { new ResizeObserver(styleAef).observe(rng); } catch (e) {}  // the lit span is in px: redo it when the track gets its width
+          // full screen. The widget lives in a shadow root, so the document's
+          // fullscreenElement is the shadow HOST, never our root: walk down the
+          // shadow roots before comparing (the deck notebook's realFs), or the
+          // full-screen layout never applies and the strip is clipped at the
+          // viewport (Stephen, 2026-09-01: "we still have that problem with the
+          // strip"). In full screen the panes take the whole viewport and the
+          // strip floats over their foot, translucent, scrolling inside itself
+          // past 45vh, the way the deck notebooks' HUD does.
+          const isFull = () => {
+            let fe = document.fullscreenElement;
+            while (fe && fe.shadowRoot && fe.shadowRoot.fullscreenElement) fe = fe.shadowRoot.fullscreenElement;
+            return fe === root;
+          };
+          const stripCss = "display:flex;flex-direction:column;gap:.25rem;padding:.35rem .4rem;background:#fff;color:#222";
           const paneHeight = () => {
-            const full = document.fullscreenElement === root;
-            const h = full ? Math.max(200, window.innerHeight - strip.offsetHeight - 8) : (cfg.height || 720);
-            for (const pn of [L.pane, R.pane]) pn.style.height = h + "px";
+            const full = isFull();
+            root.style.position = full ? "relative" : "";
+            root.style.height = full ? "100vh" : "";
+            root.style.boxSizing = "border-box";
+            for (const pn of [L.pane, R.pane]) pn.style.height = full ? "100vh" : (cfg.height || 720) + "px";
+            strip.style.cssText = full
+              ? stripCss + ";position:absolute;left:0;right:0;bottom:0;z-index:30;background:rgba(255,255,255,.94);max-height:45vh;overflow-y:auto;box-sizing:border-box;box-shadow:0 -1px 4px rgba(0,0,0,.18)"
+              : stripCss;
+            styleAef();
           };
           const toggleFull = () => {
-            if (document.fullscreenElement === root) document.exitFullscreen();
+            if (isFull()) document.exitFullscreen();
             else root.requestFullscreen().catch((e) => say("fullscreen: " + e.message));
           };
-          document.addEventListener("fullscreenchange", () => { root.style.padding = document.fullscreenElement === root ? "4px" : ""; setTimeout(paneHeight, 30); });
-          window.addEventListener("resize", () => { if (document.fullscreenElement === root) paneHeight(); });
+          document.addEventListener("fullscreenchange", () => { setTimeout(paneHeight, 30); });
+          window.addEventListener("resize", () => { paneHeight(); });
           const hint = document.createElement("div");
           hint.style.cssText = mono + ";opacity:.55";
-          hint.textContent = "keys: [ ] S2 year · , . label year · 1-3 fill · P perimeters · L labels · F full screen · hover a perimeter for the fire · click a hexagon for its row";
+          hint.textContent = "keys: [ ] S2 year · , . label year · 1-3 fill · - = AEF from · _ + AEF to · P perimeters · L labels · F full screen · hover a perimeter for the fire · click a hexagon for its row";
           hint.style.color = "#666";
           strip.appendChild(hint);
           const step = (arr, cur, d) => { const i = arr.indexOf(cur); return arr[Math.max(0, Math.min(arr.length - 1, (i < 0 ? 0 : i) + d))]; };
@@ -1368,6 +1487,8 @@ def _(anywidget, asyncio, traitlets):
             if (k === "[" || k === "]") { s2y = step(cfg.s2_years || [], s2y, k === "]" ? 1 : -1); styleS2(); send("s2"); }
             else if (k === "," || k === ".") { ly = step(cfg.label_years || [], ly, k === "." ? 1 : -1); styleLy(); send("label"); }
             else if (k >= "1" && k <= "9") { const f = fills[Number(k) - 1]; if (f) { fill = f.value; styleFill(); send("fill"); } }
+            else if (k === "-" || k === "=") { const v = step(aefYears, y0, k === "=" ? 1 : -1); if (v < y1) { y0 = v; styleAef(); aefRelease(); } }
+            else if (k === "_" || k === "+") { const v = step(aefYears, y1, k === "+" ? 1 : -1); if (v > y0) { y1 = v; styleAef(); aefRelease(); } }
             else if (k === "l" || k === "L") { labelsOn = !labelsOn; labels(labelsOn); send("labels"); }
             else if (k === "p" || k === "P") { perimsOn = !perimsOn; perims(); send("perims"); }
             else if (k === "f" || k === "F") { toggleFull(); }
@@ -1683,12 +1804,13 @@ def _(anywidget, asyncio, traitlets):
 
 
 @app.cell
-def _(FILLS, FILL_NAMES, FILL_SHORT, HEX_ZOOM, HOME, LABELS_SLOT, LABEL_YEAR0, LABEL_YEARS, MTBS_LAYER, MTBS_PMTILES, PairMap, RASTER_TILE, S2_YEAR0, S2_YEARS, VIEW_H, json, lc_bounds):
+def _(AEF_FROM0, AEF_TO0, AEF_YEARS_ALL, FILLS, FILL_NAMES, FILL_SHORT, HEX_ZOOM, HOME, LABELS_SLOT, LABEL_YEAR0, LABEL_YEARS, MTBS_LAYER, MTBS_PMTILES, PairMap, RASTER_TILE, S2_YEAR0, S2_YEARS, VIEW_H, json, lc_bounds):
     # ---- the map: built ONCE, empty; never re-runs for a parameter ---------------
     pair = PairMap(config=json.dumps({
         "height": VIEW_H, "home": dict(HOME), "labels": True, "labels_slot": LABELS_SLOT, "tile": RASTER_TILE,
         "s2_year": S2_YEAR0, "label_year": LABEL_YEAR0, "fill": FILLS[0],
         "s2_years": list(S2_YEARS), "label_years": list(LABEL_YEARS),
+        "aef_from": AEF_FROM0, "aef_to": AEF_TO0, "aef_years": list(AEF_YEARS_ALL),
         "fills": [[f, FILL_SHORT[f], FILL_NAMES[f]] for f in FILLS],
         "hex_zoom": HEX_ZOOM, "extent": list(lc_bounds),
         "perims": True, "perims_src": MTBS_PMTILES, "perims_layer": MTBS_LAYER,
@@ -1697,6 +1819,7 @@ def _(FILLS, FILL_NAMES, FILL_SHORT, HEX_ZOOM, HOME, LABELS_SLOT, LABEL_YEAR0, L
         "frame": None, "sent": None, "box": None, "res": None, "vs": None,
         "busy": False, "pending": None, "pending_force": False, "task": None, "loop": None,
         "s2y": S2_YEAR0, "ly": LABEL_YEAR0, "fill": FILLS[0], "labels": True, "perims": True,
+        "y0": AEF_FROM0, "y1": AEF_TO0,
         "hit": None, "memo": {}, "aef": {}, "mtbs": {}, "h_cam": None, "h_ctl": None, "h_pick": None,
         "runs": 0,
     }
@@ -1706,7 +1829,7 @@ def _(FILLS, FILL_NAMES, FILL_SHORT, HEX_ZOOM, HOME, LABELS_SLOT, LABEL_YEAR0, L
 
 @app.cell
 def _(
-    AEF_WINDOW,
+    AEF_YEARS_ALL,
     CELL_KM2,
     CLASSES,
     FILLS,
@@ -1813,11 +1936,11 @@ def _(
                 _say(HOLD.get("last_status", "") + " · held")
                 return
         res = res_for_view(vsd, box)
-        ly = HOLD["ly"]
-        key = (ly, res, tuple(round(v, 3) for v in box))
+        ly, y0, y1 = HOLD["ly"], HOLD["y0"], HOLD["y1"]
+        key = (ly, y0, y1, res, tuple(round(v, 3) for v in box))
         t0 = time.time()
-        years = [ly + d for d in AEF_WINDOW]
-        _say(f"res {res} · folding LCMS {ly}, AlphaEarth {years[0]}..{years[-1]}… (wiring run {HOLD['runs']})")
+        years = list(range(y0, y1 + 1))
+        _say(f"res {res} · folding LCMS {ly}, AlphaEarth {y0}..{y1} ({len(years)} years)… (wiring run {HOLD['runs']})")
         if key in HOLD["memo"]:
             fr, stats = HOLD["memo"][key]
         else:
@@ -1845,7 +1968,7 @@ def _(
             s3s = " · ".join(HOLD["mtbs"][(y, bkey)][1] for y in myears if (y, bkey) in HOLD["mtbs"])
             t1 = time.time()
             loop = asyncio.get_running_loop()
-            fr = await loop.run_in_executor(None, build_frame, nl, aef_by_year, ly, mtbs_by_year)
+            fr = await loop.run_in_executor(None, build_frame, nl, aef_by_year, y0, y1, mtbs_by_year)
             stats = " · ".join(x for x in (f"res {res}", s1, s2s, s3s, f"frame {time.time() - t1:.1f} s") if x)
             HOLD["memo"][key] = (fr, stats)
             if len(HOLD["memo"]) > 12:
@@ -1939,9 +2062,11 @@ def _(
             cell = int(cellh, 16)
             con.register("cur_cells", fr["cells"])
             r = con.execute(
-                "SELECT name, maj_name, p_chg, purity, disp, disp_pre, disp_in, disp_out, when_name, mtbs_name, mtbs_year "
+                "SELECT name, maj_name, p_chg, purity, disp, disp_max, when_name, mtbs_name, mtbs_year "
                 "FROM cur_cells WHERE cell = ?", [cell]
             ).fetchone()
+            ci = int(np.searchsorted(fr["cellid"], np.uint64(cell)))
+            row_steps = fr["steps"][:, ci] if r is not None and ci < len(fr["cellid"]) else []
             fires = p.get("fires") or []
             fires_html = (" · <b>MTBS perimeter</b>: " + "; ".join(
                 f"{f.get('name') or '?'} ({str(f.get('date') or '')[:10]}, {f.get('type') or ''}, {int(f.get('acres') or 0):,} ac)"
@@ -1953,7 +2078,8 @@ def _(
                 pair.panel = f"<span style='opacity:.7'>{cellh}{where}: not in the current frame</span>"
             else:
                 HOLD["hit"] = cell if HOLD["hit"] != cell else None
-                nm, majn, pc, pur, dsp, dp, di, do, wn, mn, my = r
+                nm, majn, pc, pur, dsp, dmx, wn, mn, my = r
+                y0, y1 = fr["y0"], fr["y1"]
                 ly = HOLD["ly"]
                 d0 = fr["D0"]
                 # BLUNT (Stephen): one plain sentence per source, then the numbers small
@@ -1964,7 +2090,7 @@ def _(
                 if wn.startswith("no AlphaEarth"):
                     l2 = "AlphaEarth has no embedding here."
                 elif wn.startswith("AlphaEarth saw no change"):
-                    l2 = "AlphaEarth saw <b>no change</b> in 2020 to 2023."
+                    l2 = f"AlphaEarth saw <b>no change</b> from {y0} to {y1}."
                 else:
                     yr = wn.split("changed in ")[1].split(" ")[0]
                     l2 = f"AlphaEarth saw the ground <b>change in {yr}</b>."
@@ -1976,8 +2102,9 @@ def _(
                 else:
                     l3 = "MTBS: no mapped fire here in these years."
                 detail = (
-                    f"shift {ly - 2}→{ly - 1} {_f(dp)} · {ly - 1}→{ly} {_f(di)} · {ly}→{ly + 1} {_f(do)}"
-                    + (f" · counts as change above {_f(d0)}" if not np.isnan(d0) else "")
+                    f"shift {y0} to {y1} {_f(dsp)} · steps "
+                    + " · ".join(f"{ya}→{yb} {_f(v)}" for (ya, yb), v in zip(fr["step_years"], row_steps))
+                    + (f" · a step counts as change above {_f(d0)}" if not np.isnan(d0) else "")
                     + f" · majority pixel class {majn} ({pur:.2f}) · {CELL_KM2.get(HOLD['res'], 0):.3f} km²{where}"
                 )
                 pair.panel = (
@@ -2014,6 +2141,13 @@ def _(
             if y in LABEL_YEARS and y != HOLD["ly"]:
                 HOLD["ly"] = y
                 _cfg(label_year=y)
+                _request(force=True)
+            return
+        if act == "aef":
+            a, b = int(c.get("y0", HOLD["y0"])), int(c.get("y1", HOLD["y1"]))
+            if a in AEF_YEARS_ALL and b in AEF_YEARS_ALL and a < b and (a, b) != (HOLD["y0"], HOLD["y1"]):
+                HOLD["y0"], HOLD["y1"] = a, b
+                _cfg(aef_from=a, aef_to=b)
                 _request(force=True)
             return
         if act == "fill":
@@ -2064,8 +2198,9 @@ def _(mo):
     DuckDB over the CURRENT view's cells (press the button after the map
     settles): `cls` / `name` (the cell's main change class, or Stable when
     under `CHG_MIN` of its pixels changed), `p_chg`, `disp` (the AlphaEarth
-    displacement, the largest step) with `disp_pre` (Y-2 to Y-1), `disp_in`
-    (Y-1 to Y), `disp_out` (Y to Y+1), `moved`, `when` / `when_name`, and
+    displacement between the window's two ends), `disp_max` (its largest single
+    step) with one `step_YYYY` per step ending in YYYY, `moved`, `when` (the
+    year, or -1 never, -2 no embedding) / `when_name`, and
     `mtbs_sev` / `mtbs_name` / `mtbs_year` (the burn severity majority and the
     year it burned, label year or the year before; 0 when not mapped burned).
     """)
@@ -2089,9 +2224,7 @@ def _(HOLD, con, mo, tables_btn):
                round(avg(p_chg), 3) AS p_chg_mean,
                round(100 * avg(CASE WHEN moved THEN 1 ELSE 0 END) FILTER (WHERE disp IS NOT NULL), 1) AS pct_moved,
                round(median(disp), 4) AS disp_p50,
-               round(median(disp_pre), 4) AS disp_pre_p50,
-               round(median(disp_in), 4) AS disp_in_p50,
-               round(median(disp_out), 4) AS disp_out_p50
+               round(median(disp_max), 4) AS disp_max_p50
         FROM view_cells GROUP BY cls, name ORDER BY cells DESC
         """,
         engine=con,

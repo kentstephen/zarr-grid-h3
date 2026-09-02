@@ -25,11 +25,18 @@ should just show the raster, not hexified, as S2".
 - H3 is the container that makes the two panes the same grid: the fold is
   the H3 UDF inside DataFusion (repo rule), and the outline mirrored on the
   left is the exact cell the fill was folded from.
-- Years are a control, not a constant. Only the overlap of the three sources
-  is offered: label years 2022 and 2023 (LCMS runs 1999-2023 less 2016, S2
-  2022-2024, AEF 2017-2025). The S2 year is its own control (2022, 2023,
-  2024) so a fall burn can be looked at in the next year's mosaic while the
-  label stays put.
+- Years are a control, not a constant. Each source offers what it has:
+  label years 2022 and 2023 (LCMS runs 1999-2023 less 2016), Sentinel-2
+  2022-2025 (2025 is in the bucket for every tile round Dixie, uploaded
+  2026-01-31, and not yet in the STAC: the script builds the item from the
+  sibling year's path), AlphaEarth 2017-2025. The S2 year is its own control
+  so a fall burn can be looked at in the next year's mosaic while the label
+  stays put. The AlphaEarth window is its own control too (2026-09-01,
+  Stephen: "it'd be nice just to set the window for the years"): a from year
+  and a to year on one row of nine, opening at 2020..2023. "AEF changed" is
+  the shift between the two ends (1 - cos of the from and to vectors), "AEF
+  change year" the first consecutive step inside the window above the quiet
+  level. The label year no longer drives the window.
 - Protan-safe: the LCMS palette from the previous build (fire orange, no
   reds), viridis for the shift ramp, blue / orange / purple for the "when"
   categorical, light grey for Stable and never.
