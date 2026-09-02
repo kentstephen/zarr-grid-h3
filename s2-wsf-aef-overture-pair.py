@@ -1633,37 +1633,26 @@ def _(anywidget, asyncio, traitlets):
             legend.replaceChildren();
             let items = [];
             try { items = JSON.parse(model.get("legend") || "[]"); } catch (e) { items = []; }
-            // STACKED (Stephen, 2026-09-02): the year fills come as items with a
-            // share; draw them as one bar, left to right in the order sent,
-            // each segment the width of its share, the labels under it in the
-            // same order, all inside a card like the map headers
-            const stacked = items.length > 0 && items.every((it) => !it.ramp && it.pct != null);
-            if (stacked) {
+            // ROWS (Stephen, 2026-09-02, after the stacked bar: "this is not
+            // helpful"): the year fills come as items with a share; one row
+            // per year, the colour box first, then the year and its share
+            // on the same line, each year on a new line, inside a card
+            const rows = items.length > 0 && items.every((it) => !it.ramp && it.pct != null);
+            if (rows) {
               const card = document.createElement("div");
-              card.className = "sp-stack";
-              card.style.cssText = "display:flex;flex-direction:column;gap:.4rem;width:100%;max-width:56rem;padding:6px 10px 8px;" +
+              card.className = "sp-rows";
+              card.style.cssText = "display:flex;flex-direction:column;gap:.25rem;padding:6px 10px 8px;font-size:13px;" +
                 "background:#fff;border-radius:6px;box-shadow:0 1px 3px rgba(0,0,0,.18)";
-              const bar = document.createElement("div");
-              bar.style.cssText = "display:flex;width:100%;height:16px;border-radius:3px;overflow:hidden;background:#eee";
-              const labels = document.createElement("div");
-              labels.style.cssText = "display:flex;flex-wrap:wrap;gap:.25rem .9rem;align-items:center;font-size:13px";
-              const tot = items.reduce((a, it) => a + (Number(it.pct) || 0), 0) || 100;
               for (const it of items) {
-                const seg = document.createElement("div");
-                seg.style.cssText = "height:100%;flex:0 0 " + (100 * (Number(it.pct) || 0) / tot) + "%;background:" + it.hex + ";min-width:1px";
-                seg.title = it.name + " " + it.pct + "%";
-                bar.appendChild(seg);
-                const lab = document.createElement("span");
-                lab.style.cssText = "display:inline-flex;align-items:center;gap:.35rem;white-space:nowrap";
+                const row = document.createElement("div");
+                row.style.cssText = "display:flex;align-items:center;gap:.45rem;white-space:nowrap";
                 const chip = document.createElement("span");
-                chip.style.cssText = "display:inline-block;width:11px;height:11px;border-radius:2px;background:" + it.hex;
+                chip.style.cssText = "display:inline-block;flex:0 0 12px;width:12px;height:12px;border-radius:2px;background:" + it.hex;
                 const t = document.createElement("span");
-                t.textContent = (it.short || it.name) + " " + it.pct + "%";
-                t.title = it.name;
-                lab.append(chip, t);
-                labels.appendChild(lab);
+                t.textContent = it.name + " " + it.pct + "%";
+                row.append(chip, t);
+                card.appendChild(row);
               }
-              card.append(bar, labels);
               legend.appendChild(card);
               return;
             }
