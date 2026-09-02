@@ -120,6 +120,10 @@ def _():
 @app.cell(hide_code=True)
 def _(mo):
     mo.md("""
+    [![Open in molab](https://molab.marimo.io/molab-shield.svg)](https://molab.marimo.io/github/github.com/kentstephen/zarr-grid-h3/blob/main/s2-lcms-aef-mtbs-pair.py)
+    <small>the maps may be more responsive run locally:
+    `uv run marimo edit s2-lcms-aef-mtbs-pair.py --sandbox`</small>
+
     # The S2 hex pair
 
     **Left**: the Sentinel-2 yearly mosaic, a picture, never covered. **Right**:
