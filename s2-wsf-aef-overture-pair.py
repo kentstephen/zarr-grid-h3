@@ -61,7 +61,7 @@ Attribution: WSF Tracker (c) DLR and MindEarth, via source.coop
 (mindearth/wsf, DOI 10.5281/zenodo.20424537). "The AlphaEarth Foundations
 Satellite Embedding dataset is produced by Google and Google DeepMind."
 (CC-BY 4.0.) Sentinel-2 yearly mosaics by Earth Genome (Copernicus Sentinel
-data).
+data). Place search by Photon (komoot), OpenStreetMap data (ODbL).
 
 TODO (Stephen, 2026-09-02): Overture BUILDINGS from the fused partition on
 source.coop as the next layer, drawn only zoomed in (the bias-bounty tutorial
@@ -153,7 +153,9 @@ def _(mo):
     hexagon on either side and its ring is drawn on both.
 
     - **S2** (left header, keys `[` `]`): which mosaic, 2022 to 2025. The
-      `scale` slider is a gain on the picture.
+      `scale` slider is a gain on the picture. **FIND** under them: a Photon
+      geocoder; the hits drop down as you type, arrows or the mouse pick one,
+      Enter or a click flies both maps there.
     - **FILL** (keys `1` to `5`): **WSF built**, the record itself as a
       raster, the half-year each 10 m pixel first read as built-up, one color
       per year (no hexagons) · **WSF grew**, the share of the hexagon that
@@ -1198,7 +1200,10 @@ def _(anywidget, asyncio, traitlets):
         (JSON), `status` / `panel` / `legend` (strings for the strip).
         Browser -> kernel: `view` (JSON lon/lat/zoom + the pane's w/h on every
         moveend), `pick` (JSON: the clicked cell as hex, or null), `ctl`
-        (JSON: s2 year, s2 scale, the window, fill, labels)."""
+        (JSON: s2 year, s2 scale, the window, fill, labels). The Photon
+        geocoder on the left card is browser-only: it asks photon.komoot.io
+        as you type, lists the hits, and flies the left map; the camera
+        sync and moveend do the rest."""
 
         cells = traitlets.Bytes(b"").tag(sync=True)
         colors = traitlets.Bytes(b"").tag(sync=True)
@@ -1457,6 +1462,99 @@ def _(anywidget, asyncio, traitlets):
           scr.addEventListener("dblclick", (e) => { e.preventDefault(); s2scale = 1; styleSc(); scRelease(); });
           setTimeout(styleSc, 0);
           try { new ResizeObserver(styleSc).observe(scr); } catch (e) {}
+          // the geocoder: Photon (the x-sql deck notebook's field), asked from the
+          // browser as you type, debounced, biased on the camera; the hits in a
+          // dropdown under the field so the place is seen before the flight
+          // (Stephen, 2026-09-02: "the dropdown auto complete so i can see where
+          // it's gonna take me"). Enter or a click flies the left map; the camera
+          // sync carries the right, and moveend sends the view like any pan. No
+          // kernel round trip: no ctl, no comm, nothing for the fold to see early.
+          rowBreak(L.head);
+          const PHOTON = "https://photon.komoot.io/api/";
+          const gcWrap = document.createElement("span");
+          gcWrap.style.cssText = "position:relative;display:inline-flex;align-items:center;gap:.4rem";
+          const gcLab = document.createElement("span"); gcLab.textContent = "find";
+          gcLab.style.cssText = "font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#6b6b68";
+          const gc = document.createElement("input");
+          gc.type = "search"; gc.placeholder = "a place\u2026"; gc.autocomplete = "off"; gc.spellcheck = false;
+          gc.title = "Photon geocoder: type, pick a hit (arrows, Enter, or click) and both maps fly there";
+          gc.style.cssText = "width:16rem;" + font + ";padding:.15rem .45rem;border:1px solid rgba(29,29,27,.28);border-radius:5px;background:#fff;color:#1d1d1b";
+          const gcList = document.createElement("div");
+          gcList.className = "sp-hits";
+          gcList.style.cssText = "position:absolute;left:0;top:calc(100% + 4px);z-index:9;display:none;min-width:100%;max-width:26rem;" +
+            "background:#fff;color:#1d1d1b;border:1px solid rgba(29,29,27,.28);border-radius:6px;box-shadow:0 2px 8px rgba(0,0,0,.18);overflow:hidden";
+          gcWrap.append(gcLab, gc, gcList);
+          rowOf(L.head).appendChild(gcWrap);
+          let gcHits = [], gcSel = -1, gcTimer = null, gcSeq = 0;
+          const GC_DEBOUNCE_MS = 250, GC_LIMIT = 6;
+          const hitName = (f) => {
+            const p = f.properties || {};
+            const parts = [p.name, p.street && !p.name ? p.street : null, p.city && p.city !== p.name ? p.city : null,
+              p.county && p.county !== p.city && p.county !== p.name ? p.county : null, p.state, p.country];
+            return parts.filter((x) => x).join(", ");
+          };
+          const hitKind = (f) => { const p = f.properties || {}; return [p.osm_value, p.type].filter((x) => x && x !== "yes").join(" \u00b7 "); };
+          const gcHide = () => { gcList.style.display = "none"; gcList.replaceChildren(); gcSel = -1; };
+          const gcShow = () => {
+            gcList.replaceChildren();
+            if (!gcHits.length) { gcHide(); return; }
+            gcHits.forEach((f, i) => {
+              const row = document.createElement("div");
+              row.style.cssText = "padding:.3rem .55rem;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.3;" +
+                (i === gcSel ? "background:" + ACCENT + ";color:#fff" : "");
+              const nm = document.createElement("div"); nm.textContent = hitName(f);
+              const kd = document.createElement("div"); kd.textContent = hitKind(f);
+              kd.style.cssText = "font-size:11px;opacity:" + (i === gcSel ? ".85" : ".6");
+              row.append(nm, kd);
+              row.onmousedown = (e) => { e.preventDefault(); gcFly(f); };  // before the input's blur
+              row.onmouseenter = () => { gcSel = i; gcShow(); };
+              gcList.appendChild(row);
+            });
+            gcList.style.display = "block";
+          };
+          const gcAsk = async () => {
+            const q = gc.value.trim();
+            if (q.length < 2) { gcHits = []; gcHide(); return; }
+            const seq = ++gcSeq;
+            const params = new URLSearchParams({q, limit: String(GC_LIMIT), lang: "en"});
+            if (mapL) { const c = mapL.getCenter(); params.set("lon", c.lng.toFixed(4)); params.set("lat", c.lat.toFixed(4)); }
+            try {
+              const r = await fetch(PHOTON + "?" + params.toString());
+              const data = await r.json();
+              if (seq !== gcSeq) return;  // a later keystroke answered first
+              gcHits = (data.features || []).filter((f) => f.geometry && f.geometry.coordinates);
+              gcSel = gcHits.length ? 0 : -1;
+              gcShow();
+            } catch (e) { if (seq === gcSeq) say("search: " + e.message); }
+          };
+          const gcFly = (f) => {
+            const [lon, lat] = f.geometry.coordinates;
+            const ext = (f.properties || {}).extent;  // [minLon, maxLat, maxLon, minLat]
+            const w = (L.mapEl.clientWidth || 700);
+            let zoom = 10;
+            if (ext && ext.length === 4) {
+              const span = Math.max(Math.abs(ext[2] - ext[0]), Math.abs(ext[1] - ext[3]) * 2, 0.01);
+              zoom = Math.log2(360 * (w / 512) / span) - 0.3;
+            }
+            zoom = Math.max(3.5, Math.min(14, zoom));
+            gc.value = hitName(f); gcHits = []; gcHide(); gc.blur();
+            if (mapL) mapL.flyTo({center: [lon, lat], zoom, duration: 2000});
+            say("\u2192 " + hitName(f) + " \u00b7 zoom " + zoom.toFixed(1));
+          };
+          gc.addEventListener("input", () => { if (gcTimer) clearTimeout(gcTimer); gcTimer = setTimeout(gcAsk, GC_DEBOUNCE_MS); });
+          gc.addEventListener("focus", () => { if (gcHits.length) gcShow(); });
+          gc.addEventListener("blur", () => { setTimeout(gcHide, 120); });
+          gc.addEventListener("keydown", (e) => {
+            e.stopPropagation();  // the map's own keys (1-5, [ ], ...) stay out of the field
+            if (e.key === "ArrowDown" && gcHits.length) { gcSel = (gcSel + 1) % gcHits.length; gcShow(); e.preventDefault(); }
+            else if (e.key === "ArrowUp" && gcHits.length) { gcSel = (gcSel - 1 + gcHits.length) % gcHits.length; gcShow(); e.preventDefault(); }
+            else if (e.key === "Enter") {
+              e.preventDefault();
+              if (gcHits.length) gcFly(gcHits[Math.max(0, gcSel)]);
+              else { if (gcTimer) clearTimeout(gcTimer); gcAsk().then(() => { if (gcHits.length) gcFly(gcHits[0]); else say("no match: " + gc.value.trim()); }); }
+            }
+            else if (e.key === "Escape") { gcHide(); gc.blur(); }
+          });
           // full screen. The widget lives in a shadow root, so the document's
           // fullscreenElement is the shadow HOST, never our root: walk down the
           // shadow roots before comparing (the deck notebook's realFs), or the
@@ -1516,7 +1614,7 @@ def _(anywidget, asyncio, traitlets):
           // timings and tile counts of a finished fold stay hidden
           const say = (t) => {
             status.textContent = t || "";
-            if (cfg.minimal) status.hidden = !/folding|failed|zoom in past/.test(t || "");
+            if (cfg.minimal) status.hidden = !/folding|failed|zoom in past|no match|search:/.test(t || "");
           };
           const renderLegend = () => {
             legend.replaceChildren();
