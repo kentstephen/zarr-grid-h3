@@ -167,8 +167,8 @@ def _(mo):
       handle; the frame is rebuilt when you let go (WSF is folded once per
       view; only the AlphaEarth years not yet held are fetched).
     - **Overture lines** on both panes in gold, one level per zoom: states
-      below zoom 8, counties 8 to 10, localities from 10. Key `B` hides them.
-      Hover one and the strip names it.
+      below zoom 8, counties from 8. Key `B` hides them. Hover one and the
+      strip names it.
     - Click a hexagon for its story: the county, what WSF says, when
       AlphaEarth saw the ground change. `L` toggles the basemap labels, `F`
       full screen.
@@ -255,7 +255,8 @@ def _(os, tempfile):
     # with `@name`. ONE level at a time by zoom, the canopy notebook's bands
     # (Stephen, 2026-09-02: "states and the counties and the localities are
     # zoom dependent just like in the other notebook"): states below zoom 8,
-    # counties 8 to 10, localities from 10. The floors are where the build
+    # counties from 8 (localities from 10 were tried and switched off, see
+    # DIVISION_BANDS). The floors are where the build
     # first holds each subtype (counties z8, localities z10; maplibre does
     # not underzoom, so a band cannot start before its tiles). All in the
     # gold of the MTBS perimeters, one line, no casing ("just make it align
@@ -263,7 +264,13 @@ def _(os, tempfile):
     # h8 partition above stays the join.
     DIVISIONS_PMTILES = "https://overturemaps-extras-us-west-2.s3.us-west-2.amazonaws.com/tiles/2026-08-19.0/divisions.pmtiles"
     DIVISIONS_LAYER = "division_area"
-    DIVISION_BANDS = [["region", 0, 8, 2.2], ["county", 8, 10, 1.6], ["locality", 10, 24, 1.2]]  # subtype, from zoom, to zoom, line px
+    # subtype, from zoom, to zoom, line px. Localities are OFF (Stephen,
+    # 2026-09-02, Las Vegas at zoom 11: "these look like neighborhoods or
+    # microhoods, getting in the way of observation. comment out locality for
+    # now"); put the third band back and end the county band at 10 to try
+    # them again.
+    DIVISION_BANDS = [["region", 0, 8, 2.2], ["county", 8, 24, 1.6]]
+    # DIVISION_BANDS = [["region", 0, 8, 2.2], ["county", 8, 10, 1.6], ["locality", 10, 24, 1.2]]
 
     VIEW_W, VIEW_H = 700, 720  # one pane
     # the strip under the map, minimal (Stephen, 2026-09-01): the legend, the
@@ -1804,11 +1811,11 @@ def _(anywidget, asyncio, traitlets):
           }
           // Overture division lines: a maplibre vector source per map from
           // Overture's own divisions PMTiles. ONE subtype per zoom band (states
-          // below 8, counties 8-10, localities from 10; the canopy notebook's
-          // ladder), each a gold line (the MTBS perimeters' gold), no casing;
+          // below 8, counties from 8, localities switched off; the canopy
+          // notebook's ladder), each a gold line (the MTBS perimeters' gold), no casing;
           // an invisible fill per band for the hit test; under the labels.
           const BND = cfg.bounds_src, BLAYER = cfg.bounds_layer;
-          const BANDS = cfg.bands || [["region", 0, 8, 2.2], ["county", 8, 10, 1.6], ["locality", 10, 24, 1.2]];
+          const BANDS = cfg.bands || [["region", 0, 8, 2.2], ["county", 8, 24, 1.6]];
           const GOLD = "#ffc828";
           const bandAt = (z) => BANDS.find((b) => z >= b[1] && z < b[2]) || null;
           const divIds = () => BANDS.flatMap((b) => ["div-" + b[0], "div-hit-" + b[0]]);

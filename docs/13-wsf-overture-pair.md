@@ -202,6 +202,12 @@ need to go that high but I want to try." So:
   ground since carries a year color. Worth stating on the panel at some
   point.
 
+Round 4 (2026-09-02): localities off. Stephen, over Las Vegas at zoom 11:
+"the locality thing is a bit much, these look like neighborhoods or
+microhoods, getting in the way of observation. comment out locality for
+now." The county band now runs from zoom 8 with no upper end; the
+three-band constant is kept as a comment in DIVISION_BANDS.
+
 ## Opens
 
 - WSF never unbuilds: a burned lot stays "built by 2016" in the record. The
