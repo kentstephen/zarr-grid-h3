@@ -68,7 +68,6 @@ source.coop as the next layer, drawn only zoomed in (the bias-bounty tutorial
 notebook already does that for a lot of buildings). Not started.
 """
 
-
 import marimo
 
 __generated_with = "0.24.0"
@@ -303,12 +302,12 @@ def _(os, tempfile):
                 2024: (140, 86, 75), 2025: (45, 45, 45),
                 -1: (222, 222, 222), -2: (150, 150, 150), -3: (236, 236, 236)}
     return (
+        AEF_FROM0,
         AEF_INDEX_URL,
         AEF_LEVEL_FOR_RES,
         AEF_MAX_FILES,
         AEF_NODATA,
         AEF_PREFIX,
-        AEF_FROM0,
         AEF_RES,
         AEF_TO0,
         AEF_X0,
@@ -317,13 +316,13 @@ def _(os, tempfile):
         ALPHA_FILL,
         ALPHA_QUIET,
         BASE_RES,
-        GREW_RAMP,
         CACHE_DIR,
         CELL_BUDGET,
         FA,
         FILLS,
         FILL_NAMES,
         FILL_SHORT,
+        GREW_RAMP,
         HEX_ZOOM,
         HOME,
         LABELS_SLOT,
@@ -356,7 +355,6 @@ def _(os, tempfile):
         WSF_RES,
         WSF_X0,
         WSF_Y0,
-        WSF_YEARS,
         YEAR_RGB,
         ZOOM0,
         wsf_bounds,
@@ -364,7 +362,18 @@ def _(os, tempfile):
 
 
 @app.cell
-def _(BASE_RES, CELL_BUDGET, MAX_RES, MIN_RES, PAD, PER_RES, VIEW_H, VIEW_W, ZOOM0, math):
+def _(
+    BASE_RES,
+    CELL_BUDGET,
+    MAX_RES,
+    MIN_RES,
+    PAD,
+    PER_RES,
+    VIEW_H,
+    VIEW_W,
+    ZOOM0,
+    math,
+):
     # ---- the camera -> box and res --------------------------------------------
     CELL_KM2 = {5: 252.9, 6: 36.13, 7: 5.161, 8: 0.7373, 9: 0.1053, 10: 0.01505, 11: 0.00215, 12: 0.000307}
 
@@ -607,11 +616,11 @@ def _(
             f"WSF {w:,}x{h:,} samples (stride {stride}, {10 * stride} m) read {tr - t0:.1f} s · fold {out.num_rows:,} {time.time() - tr:.1f} s"
         )
 
-    return WSF_DATE, idx_h1, idx_h2, idx_year, wsf_fold, wsf_tile_png
+    return WSF_DATE, idx_h1, idx_h2, wsf_fold, wsf_tile_png
 
 
 @app.cell
-async def _(
+def _(
     AEF_INDEX_URL,
     AEF_LEVEL_FOR_RES,
     AEF_MAX_FILES,
@@ -980,8 +989,8 @@ def _(duckdb):
 def _(
     ALPHA_FILL,
     ALPHA_QUIET,
-    GREW_RAMP,
     FA,
+    GREW_RAMP,
     MIN_STABLE_CELLS,
     NEW_MIN,
     VIRIDIS,
@@ -1160,16 +1169,20 @@ def _(
                          "title": f"1 - cos between the cell's AlphaEarth vectors in {y0} and {y1} (the two ends of the window, whatever happened between), stretched to this view's p2-p98"}]
             if kind == "when":
                 items = []
+                when_short = {-1: "no single year", -2: "no embedding"}
                 for w in [yb for _, yb in step_years] + [-1, -2]:
                     m = when == w
                     if m.any():
-                        items.append({"name": when_name[w], "hex": "#%02x%02x%02x" % YEAR_RGB.get(w, (45, 45, 45)), "pct": round(100 * int(m.sum()) / tot, 1)})
+                        items.append({"name": when_name[w], "short": when_short.get(w, str(w)),
+                                      "hex": "#%02x%02x%02x" % YEAR_RGB.get(w, (45, 45, 45)), "pct": round(100 * int(m.sum()) / tot, 1)})
                 return items
             items = []
+            byear_short = {-1: f"before {y0 + 1}", -3: "nothing built"}
             for b in new_years + [-1, -3]:
                 m = byear == b
                 if m.any():
-                    items.append({"name": byear_name[b], "hex": "#%02x%02x%02x" % YEAR_RGB.get(b, (45, 45, 45)), "pct": round(100 * int(m.sum()) / tot, 1)})
+                    items.append({"name": byear_name[b], "short": byear_short.get(b, str(b)),
+                                  "hex": "#%02x%02x%02x" % YEAR_RGB.get(b, (45, 45, 45)), "pct": round(100 * int(m.sum()) / tot, 1)})
             return items
 
         n_moved = int(moved.sum())
@@ -1292,17 +1305,6 @@ def _(anywidget, asyncio, traitlets):
           };
           const L = mkPane("left"), R = mkPane("right");
           row.append(L.pane, R.pane);
-          // FOLDING PILL (Stephen, 2026-09-02: "when it's calculating hexagons, I
-          // wanna know that"): on the right map, up the instant a view is sent
-          // past hex zoom, down with the first status that is not a fold
-          const fold = document.createElement("div");
-          fold.className = "sp-fold";
-          fold.textContent = "folding hexagons\u2026";
-          fold.style.cssText = "position:absolute;left:8px;bottom:28px;z-index:6;padding:6px 12px;border-radius:999px;" +
-            "background:rgba(29,29,27,.9);color:#fff;font:600 14px ui-sans-serif,system-ui,sans-serif;letter-spacing:.01em;" +
-            "box-shadow:0 1px 4px rgba(0,0,0,.35);pointer-events:none;animation:sp-pulse 1.1s ease-in-out infinite";
-          fold.hidden = true;
-          R.pane.append(fold);
           const strip = document.createElement("div");
           strip.style.cssText = "display:flex;flex-direction:column;gap:.25rem;padding:.35rem .4rem;background:#fff;color:#222";  // rewritten by paneHeight (stripCss) in full screen
           const status = document.createElement("div");
@@ -1368,7 +1370,6 @@ def _(anywidget, asyncio, traitlets):
           const aefYears = cfg.aef_years || [];
           const sty = document.createElement("style");
           sty.textContent = [
-            "@keyframes sp-pulse{0%,100%{opacity:1}50%{opacity:.55}}",
             ".sp-range{position:relative;width:300px;height:30px}",
             ".sp-range input{position:absolute;left:0;top:0;width:100%;height:22px;margin:0;background:none;pointer-events:none;-webkit-appearance:none;appearance:none}",
             ".sp-range input:focus{outline:none}",
@@ -1626,13 +1627,46 @@ def _(anywidget, asyncio, traitlets):
           // timings and tile counts of a finished fold stay hidden
           const say = (t) => {
             status.textContent = t || "";
-            fold.hidden = !/folding/.test(t || "");
             if (cfg.minimal) status.hidden = !/folding|failed|zoom in past|no match|search:/.test(t || "");
           };
           const renderLegend = () => {
             legend.replaceChildren();
             let items = [];
             try { items = JSON.parse(model.get("legend") || "[]"); } catch (e) { items = []; }
+            // STACKED (Stephen, 2026-09-02): the year fills come as items with a
+            // share; draw them as one bar, left to right in the order sent,
+            // each segment the width of its share, the labels under it in the
+            // same order, all inside a card like the map headers
+            const stacked = items.length > 0 && items.every((it) => !it.ramp && it.pct != null);
+            if (stacked) {
+              const card = document.createElement("div");
+              card.className = "sp-stack";
+              card.style.cssText = "display:flex;flex-direction:column;gap:.4rem;width:100%;max-width:56rem;padding:6px 10px 8px;" +
+                "background:#fff;border-radius:6px;box-shadow:0 1px 3px rgba(0,0,0,.18)";
+              const bar = document.createElement("div");
+              bar.style.cssText = "display:flex;width:100%;height:16px;border-radius:3px;overflow:hidden;background:#eee";
+              const labels = document.createElement("div");
+              labels.style.cssText = "display:flex;flex-wrap:wrap;gap:.25rem .9rem;align-items:center;font-size:13px";
+              const tot = items.reduce((a, it) => a + (Number(it.pct) || 0), 0) || 100;
+              for (const it of items) {
+                const seg = document.createElement("div");
+                seg.style.cssText = "height:100%;flex:0 0 " + (100 * (Number(it.pct) || 0) / tot) + "%;background:" + it.hex + ";min-width:1px";
+                seg.title = it.name + " " + it.pct + "%";
+                bar.appendChild(seg);
+                const lab = document.createElement("span");
+                lab.style.cssText = "display:inline-flex;align-items:center;gap:.35rem;white-space:nowrap";
+                const chip = document.createElement("span");
+                chip.style.cssText = "display:inline-block;width:11px;height:11px;border-radius:2px;background:" + it.hex;
+                const t = document.createElement("span");
+                t.textContent = (it.short || it.name) + " " + it.pct + "%";
+                t.title = it.name;
+                lab.append(chip, t);
+                labels.appendChild(lab);
+              }
+              card.append(bar, labels);
+              legend.appendChild(card);
+              return;
+            }
             for (const it of items) {
               const s = document.createElement("span");
               s.style.cssText = "display:inline-flex;align-items:center;gap:.35rem";
@@ -1801,7 +1835,11 @@ def _(anywidget, asyncio, traitlets):
             v.n = ++seq;
             model.set("view", JSON.stringify(v));
             model.save_changes();
-            if (v.zoom >= (cfg.hex_zoom || 9)) fold.hidden = false;
+            // FOLDING (Stephen, 2026-09-02: "when it's calculating hexagons, I
+            // wanna know that"): the strip's status line says folding the
+            // instant a view past hex zoom goes up, before the server answers;
+            // the server's next status replaces it
+            if (v.zoom >= (cfg.hex_zoom || 9)) say("folding hexagons\u2026");
           }
 
           const cellAt = (lngLat) => {
@@ -1894,7 +1932,26 @@ def _(anywidget, asyncio, traitlets):
 
 
 @app.cell
-def _(AEF_FROM0, AEF_TO0, AEF_YEARS_ALL, FILLS, FILL_NAMES, FILL_SHORT, HEX_ZOOM, HOME, LABELS_SLOT, PairMap, RASTER_TILE, S2_SCALE0, S2_YEAR0, S2_YEARS, STRIP_MINIMAL, VIEW_H, json, wsf_bounds):
+def _(
+    AEF_FROM0,
+    AEF_TO0,
+    AEF_YEARS_ALL,
+    FILLS,
+    FILL_NAMES,
+    FILL_SHORT,
+    HEX_ZOOM,
+    HOME,
+    LABELS_SLOT,
+    PairMap,
+    RASTER_TILE,
+    S2_SCALE0,
+    S2_YEAR0,
+    S2_YEARS,
+    STRIP_MINIMAL,
+    VIEW_H,
+    json,
+    wsf_bounds,
+):
     # ---- the map: built ONCE, empty; never re-runs for a parameter ---------------
     pair = PairMap(config=json.dumps({
         "height": VIEW_H, "home": dict(HOME), "labels": True, "labels_slot": LABELS_SLOT, "tile": RASTER_TILE,
@@ -2325,7 +2382,7 @@ def _(HOLD, con, mo, tables_btn):
         """,
         engine=con,
     )
-    return (year_by_year,)
+    return
 
 
 if __name__ == "__main__":

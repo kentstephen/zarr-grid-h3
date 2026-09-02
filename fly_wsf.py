@@ -59,7 +59,8 @@ try:
         pg.mouse.move(box["x"] + box["width"] * 0.5, box["y"] + box["height"] * 0.5)
         time.sleep(1)
         print("hover layers:", pg.evaluate("window.__spLayers()"))
-        print("place under pointer:", pg.locator(".sp-place").inner_text()[:200])
+        if pg.locator(".sp-place").count():
+            print("place under pointer:", pg.locator(".sp-place").inner_text()[:200])
         pg.screenshot(path=str(SHOTS / "02-hover.png"))
         pg.mouse.click(box["x"] + box["width"] * 0.5, box["y"] + box["height"] * 0.5)
         time.sleep(2)
@@ -127,7 +128,7 @@ try:
         # perimeters present on both maps?
         print("fullscreen ctrl on right map:", pg.locator(".sp-right .maplibregl-ctrl-fullscreen").count(),
               "| strip bg/color:", pg.locator(".sp-status").evaluate("e => [getComputedStyle(e.parentElement).backgroundColor, getComputedStyle(e).color]"))
-        print("bounds:", pg.evaluate("window.__spMaps().map(m => [!!m.getSource('div'), !!m.getLayer('div-region'), !!m.getLayer('div-county'), !!m.getLayer('div-locality')])"))
+        print("bounds:", pg.evaluate("window.__spMaps().map(m => [!!m.getSource('div'), !!m.getLayer('div-region'), !!m.getLayer('div-county'), !!m.getLayer('div-locality') /* off */])"))
         print("division features rendered (region, county, locality):", pg.evaluate("window.__spMaps().map(m => ['div-region', 'div-county', 'div-locality'].map(l => m.queryRenderedFeatures({layers: [l]}).length))"))
         print("layer order R:", pg.evaluate("window.__spMaps()[1].getStyle().layers.map(l => l.id).filter(id => /div-|s2-|wsf-|hexes|hover|picked|watername_ocean/.test(id))"))
         # zoom out below the hexagon zoom: WSF pyramid right, S2 from L5 left
