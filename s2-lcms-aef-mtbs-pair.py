@@ -172,6 +172,8 @@ def _(os, tempfile):
     AEF_YEARS_ALL = tuple(range(2017, 2026))
     AEF_FROM0, AEF_TO0 = 2020, 2023
     LABEL_YEAR0, S2_YEAR0 = 2022, 2022
+    # the S2 mosaic's opening `scale`: a gain on the TCI bytes (1 = as served)
+    S2_SCALE0 = 1.0
 
     # The zoom -> H3 ladder: BASE_RES at ZOOM0, one step finer every PER_RES zoom
     # units, clamped, then coarsened until the view's expected cell count fits
@@ -341,6 +343,7 @@ def _(os, tempfile):
         RASTER_TILE,
         S2_COLLECTION,
         S2_PYRAMID_Z,
+        S2_SCALE0,
         S2_STAC,
         S2_TCI_MAX_Z,
         S2_TILE_MIN_Z,
@@ -784,6 +787,7 @@ def _(
     RASTER_TILE,
     S2_COLLECTION,
     S2_PYRAMID_Z,
+    S2_SCALE0,
     S2_STAC,
     S2_TCI_MAX_Z,
     S2_TILE_MIN_Z,
@@ -809,8 +813,22 @@ def _(
     _boxes = {}  # (year, rounded box) -> item ids
     _open = {}
     _sem = asyncio.Semaphore(32)
-    _png = {}  # (year, z, x, y) -> PNG bytes or None
+    _png = {}  # (year, z, x, y, scale) -> PNG bytes or None
+    _arr = {}  # (year, z, x, y) -> the composited RGBA tile before the gain, or None
+    _gain = {"v": float(S2_SCALE0)}  # the strip's `scale`
     _tstat = {"served": 0, "blank": 0, "ms": 0.0}
+
+    def _encode(key, out):
+        """The gain (the header's `scale`) on the composited bytes, then PNG."""
+        g = _gain["v"]
+        rgba = out if g == 1.0 else np.concatenate(
+            [np.clip(out[..., :3].astype(np.float32) * g, 0, 255).astype(np.uint8), out[..., 3:]], axis=2)
+        buf = io.BytesIO()
+        Image.fromarray(np.ascontiguousarray(rgba), mode="RGBA").save(buf, format="PNG")
+        _png[key] = buf.getvalue()
+        if len(_png) > 6000:
+            _png.pop(next(iter(_png)))
+        return _png[key]
 
     def _stac(box):
         body = json.dumps({"collections": [S2_COLLECTION], "bbox": list(box), "limit": 100}).encode()
@@ -876,9 +894,13 @@ def _(
     async def s2_tile_png(z, x, y, year):
         """PNG bytes for Web Mercator tile (z, x, y) of the year's TCI mosaic, or
         None (below S2_TILE_MIN_Z, or no footprint under the tile)."""
-        key = (year, z, x, y)
+        key = (year, z, x, y, _gain["v"])
         if key in _png:
             return _png[key]
+        if (year, z, x, y) in _arr:
+            # composited already at another scale: re-encode, no read
+            out = _arr[(year, z, x, y)]
+            return _encode(key, out) if out is not None else None
         if z < S2_TILE_MIN_Z or z > S2_TCI_MAX_Z:
             _tstat["blank"] += 1
             return None
@@ -921,20 +943,29 @@ def _(
         if not out[..., 3].any():
             _tstat["blank"] += 1
             _png[key] = None
+            _arr[(year, z, x, y)] = None
             return None
-        buf = io.BytesIO()
-        Image.fromarray(np.ascontiguousarray(out), mode="RGBA").save(buf, format="PNG")
-        _png[key] = buf.getvalue()
-        if len(_png) > 6000:
-            _png.pop(next(iter(_png)))
+        _arr[(year, z, x, y)] = out
+        if len(_arr) > 2000:
+            _arr.pop(next(iter(_arr)))
+        png = _encode(key, out)
         _tstat["served"] += 1
         _tstat["ms"] += 1000 * (time.time() - t0)
-        return _png[key]
+        return png
+
+    def s2_set_scale(v):
+        """The header's `scale`: the gain the next S2 tiles are encoded with.
+        Returns True when it changed (the caller then re-asks deck for the tiles)."""
+        v = float(min(4.0, max(0.1, v)))
+        if v == _gain["v"]:
+            return False
+        _gain["v"] = v
+        return True
 
     def s2_raster_stats():
-        return dict(_tstat, cached=len(_png))
+        return dict(_tstat, cached=len(_png), scale=_gain["v"])
 
-    return s2_raster_stats, s2_tile_png
+    return s2_raster_stats, s2_set_scale, s2_tile_png
 
 
 @app.cell
@@ -1060,8 +1091,7 @@ def _(
         [np.interp(np.linspace(0, 1, 256), np.linspace(0, 1, len(_stops)), _stops[:, k]) for k in range(3)], 1
     ).round().astype(np.uint8)
     RAMP_HEX = ["#%02x%02x%02x" % tuple(int(v) for v in RAMP[i]) for i in range(0, 256, 17)]
-    con = duckdb.connect()
-    con.execute("INSTALL h3 FROM community; LOAD h3")
+    con = duckdb.connect()  # the joins and the tables under the map; no h3 extension (nothing here calls it)
     _E = [f"e{i:02d}" for i in range(64)]
     _GREY = np.array([128, 128, 128], np.uint8)
 
@@ -1252,7 +1282,7 @@ def _(anywidget, asyncio, traitlets):
         (JSON), `status` / `panel` / `legend` (strings for the strip).
         Browser -> kernel: `view` (JSON lon/lat/zoom + the pane's w/h on every
         moveend), `pick` (JSON: the clicked cell as hex, or null), `ctl` (JSON:
-        s2 year, label year, fill, labels)."""
+        s2 year, s2 scale, label year, fill, labels)."""
 
         cells = traitlets.Bytes(b"").tag(sync=True)
         colors = traitlets.Bytes(b"").tag(sync=True)
@@ -1370,10 +1400,11 @@ def _(anywidget, asyncio, traitlets):
           const btnCss = font + ";padding:.15rem .55rem;border:0;background:transparent;color:#1d1d1b;cursor:pointer;line-height:1.4;font-variant-numeric:tabular-nums";
           const onCss = (b, on) => { b.style.background = on ? ACCENT : "transparent"; b.style.color = on ? "#fff" : "#1d1d1b"; };
           let s2y = cfg.s2_year, ly = cfg.label_year, fill = cfg.fill || "lcms", labelsOn = cfg.labels !== false;
+          let s2scale = Number(cfg.s2_scale) || 1;  // the S2 mosaic's gain
           let perimsOn = cfg.perims !== false;
           let y0 = cfg.aef_from, y1 = cfg.aef_to;
           const send = (act) => {
-            model.set("ctl", JSON.stringify({act, s2y, ly, fill, y0, y1, labels: labelsOn, perims: perimsOn, n: Date.now()}));
+            model.set("ctl", JSON.stringify({act, s2y, s2scale, ly, fill, y0, y1, labels: labelsOn, perims: perimsOn, n: Date.now()}));
             model.save_changes();
           };
           // an eyebrow label + a segmented control (joined buttons, one border)
@@ -1426,6 +1457,16 @@ def _(anywidget, asyncio, traitlets):
             ".sp-range .spn{position:absolute;top:9px;height:4px;background:#2a5db0;border-radius:2px}",
             ".sp-range .tks{position:absolute;left:8px;right:8px;top:19px;display:flex;justify-content:space-between;font-size:9px;color:#6b6b68;line-height:1}",
             ".sp-range .tks span{width:0;display:flex;justify-content:center}",
+            // the S2 scale: one handle on the same track
+            ".sp-scale{position:relative;width:120px;height:22px}",
+            ".sp-scale input{position:absolute;left:0;top:0;width:100%;height:22px;margin:0;background:none;-webkit-appearance:none;appearance:none}",
+            ".sp-scale input:focus{outline:none}",
+            ".sp-scale input::-webkit-slider-runnable-track{background:none;height:22px}",
+            ".sp-scale input::-moz-range-track{background:none;height:22px}",
+            ".sp-scale input::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:16px;height:16px;margin-top:3px;border-radius:50%;background:#2a5db0;border:2px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.35);cursor:grab}",
+            ".sp-scale input::-moz-range-thumb{width:12px;height:12px;border-radius:50%;background:#2a5db0;border:2px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.35);cursor:grab}",
+            ".sp-scale .trk{position:absolute;left:8px;right:8px;top:9px;height:4px;background:rgba(29,29,27,.22);border-radius:2px}",
+            ".sp-scale .spn{position:absolute;left:8px;top:9px;height:4px;background:#2a5db0;border-radius:2px}",
           ].join("\n");
           el.appendChild(sty);
           const aefWrap = document.createElement("span");
@@ -1470,6 +1511,46 @@ def _(anywidget, asyncio, traitlets):
           rTo.addEventListener("change", aefRelease);
           setTimeout(styleAef, 0);
           try { new ResizeObserver(styleAef).observe(rng); } catch (e) {}  // the lit span is in px: redo it when the track gets its width
+          // the S2 mosaic's `scale`, beside the S2 years (Stephen, 2026-09-02:
+          // "a scale slider for s2 next to the years on the left map (brightness
+          // for observation)"): a gain on the TCI bytes, applied in the kernel
+          // where the tiles are composited, so a release drops the S2 tiles and
+          // asks deck for them again. The kernel hears the release (change),
+          // not every notch (input); the readout follows the drag.
+          const SC_MIN = 0.2, SC_MAX = 3;
+          const scWrap = document.createElement("span");
+          scWrap.style.cssText = "display:inline-flex;align-items:center;gap:.4rem";
+          const scLab = document.createElement("span"); scLab.textContent = "scale";
+          scLab.style.cssText = "font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#6b6b68";
+          const scr = document.createElement("span"); scr.className = "sp-scale";
+          const scTrk = document.createElement("span"); scTrk.className = "trk";
+          const scSpn = document.createElement("span"); scSpn.className = "spn";
+          const sc = document.createElement("input"); sc.type = "range"; sc.min = SC_MIN; sc.max = SC_MAX; sc.step = 0.1;
+          sc.title = "brightness of the Sentinel-2 mosaic (a gain on the TCI bytes, the tiles re-served as you drag; double-click for 1.0)";
+          const scTxt = document.createElement("span");
+          scTxt.style.cssText = "font-variant-numeric:tabular-nums;min-width:2.4em";
+          scr.append(scTrk, scSpn, sc);
+          scWrap.append(scLab, scr, scTxt);
+          rowOf(L.head).appendChild(scWrap);
+          const styleSc = () => {
+            sc.value = s2scale;
+            scSpn.style.width = Math.max(0, (scr.clientWidth - 16) * (s2scale - SC_MIN) / (SC_MAX - SC_MIN)) + "px";
+            scTxt.textContent = s2scale.toFixed(1) + "\u00d7";
+          };
+          let scSent = s2scale, scTimer = null;
+          const scRelease = () => { if (scTimer) { clearTimeout(scTimer); scTimer = null; } if (s2scale !== scSent) { scSent = s2scale; send("s2scale"); } };
+          // LIVE while dragging: a re-serve is cheap (the composited tile is kept
+          // in the kernel pre-gain; a scale change is a re-encode, no read), so the
+          // map follows the drag, debounced so a fast sweep is a few re-serves
+          // rather than one per notch (Stephen, 2026-09-02: "let the results show
+          // live on the map as toggled and add debounce for rapid movement")
+          const SC_DEBOUNCE_MS = 150;
+          sc.addEventListener("input", () => { s2scale = Number(sc.value); styleSc(); if (scTimer) clearTimeout(scTimer); scTimer = setTimeout(scRelease, SC_DEBOUNCE_MS); });
+          sc.addEventListener("change", scRelease);
+          // double-click the slider: back to 1.0 (Stephen, 2026-09-02)
+          scr.addEventListener("dblclick", (e) => { e.preventDefault(); s2scale = 1; styleSc(); scRelease(); });
+          setTimeout(styleSc, 0);
+          try { new ResizeObserver(styleSc).observe(scr); } catch (e) {}
           // full screen. The widget lives in a shadow root, so the document's
           // fullscreenElement is the shadow HOST, never our root: walk down the
           // shadow roots before comparing (the deck notebook's realFs), or the
@@ -1503,7 +1584,7 @@ def _(anywidget, asyncio, traitlets):
           window.addEventListener("resize", () => { paneHeight(); });
           const hint = document.createElement("div");
           hint.style.cssText = mono + ";opacity:.55";
-          hint.textContent = "keys: [ ] S2 year · , . label year · 1-3 fill · - = AEF from · _ + AEF to · P perimeters · L labels · F full screen · hover a perimeter for the fire · click a hexagon for its row";
+          hint.textContent = "keys: [ ] S2 year · ; ' S2 scale · , . label year · 1-3 fill · - = AEF from · _ + AEF to · P perimeters · L labels · F full screen · hover a perimeter for the fire · click a hexagon for its row";
           hint.style.color = "#666";
           strip.appendChild(hint);
           hint.hidden = !!cfg.minimal;
@@ -1513,6 +1594,7 @@ def _(anywidget, asyncio, traitlets):
             if (e.target && /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) return;
             const k = e.key;
             if (k === "[" || k === "]") { s2y = step(cfg.s2_years || [], s2y, k === "]" ? 1 : -1); styleS2(); send("s2"); }
+            else if (k === ";" || k === "'") { s2scale = Math.round(10 * Math.max(SC_MIN, Math.min(SC_MAX, s2scale + (k === "'" ? 0.1 : -0.1)))) / 10; styleSc(); scRelease(); }
             else if (k === "," || k === ".") { ly = step(cfg.label_years || [], ly, k === "." ? 1 : -1); styleLy(); send("label"); }
             else if (k >= "1" && k <= "9") { const f = fills[Number(k) - 1]; if (f) { fill = f.value; styleFill(); send("fill"); } }
             else if (k === "-" || k === "=") { const v = step(aefYears, y0, k === "=" ? 1 : -1); if (v < y1) { y0 = v; styleAef(); aefRelease(); } }
@@ -1622,7 +1704,10 @@ def _(anywidget, asyncio, traitlets):
               widthUnits: "pixels", getWidth: width, widthMinPixels: 1, beforeId: slot()});
           };
           const mkRaster = (src, year, maxZ, extent, visible) => new TileLayer({
-            id: src + "-" + year,
+            // the S2 id carries the scale generation: a bump is a NEW layer to
+            // deck, so its tile cache goes and every tile in view is asked for
+            // again at the new gain
+            id: src + "-" + year + (src === "s2" && cfg.s2_gen ? "-s" + cfg.s2_gen : ""),
             getTileData: getTileDataFor(src, year),
             onTileError: (e) => { if (!e || e.name !== "AbortError") say(src + " tile: " + ((e && e.message) || e)); },
             tileSize: cfg.tile || 256,
@@ -1822,6 +1907,7 @@ def _(anywidget, asyncio, traitlets):
             const was = cfg;
             try { cfg = JSON.parse(model.get("config") || "{}"); } catch (e) { cfg = {}; }
             if (cfg.s2_year !== s2y) { s2y = cfg.s2_year; styleS2(); }
+            if (Number(cfg.s2_scale) && Number(cfg.s2_scale) !== s2scale) { s2scale = Number(cfg.s2_scale); scSent = s2scale; styleSc(); }
             if (cfg.label_year !== ly) { ly = cfg.label_year; styleLy(); }
             if (cfg.fill && cfg.fill !== fill) { fill = cfg.fill; styleFill(); }
             if (cfg.labels !== was.labels) { labelsOn = cfg.labels !== false; labels(labelsOn); }
@@ -1839,11 +1925,11 @@ def _(anywidget, asyncio, traitlets):
 
 
 @app.cell
-def _(AEF_FROM0, AEF_TO0, AEF_YEARS_ALL, FILLS, FILL_NAMES, FILL_SHORT, HEX_ZOOM, HOME, LABELS_SLOT, LABEL_YEAR0, LABEL_YEARS, MTBS_LAYER, MTBS_PMTILES, PairMap, RASTER_TILE, S2_YEAR0, S2_YEARS, STRIP_MINIMAL, VIEW_H, json, lc_bounds):
+def _(AEF_FROM0, AEF_TO0, AEF_YEARS_ALL, FILLS, FILL_NAMES, FILL_SHORT, HEX_ZOOM, HOME, LABELS_SLOT, LABEL_YEAR0, LABEL_YEARS, MTBS_LAYER, MTBS_PMTILES, PairMap, RASTER_TILE, S2_SCALE0, S2_YEAR0, S2_YEARS, STRIP_MINIMAL, VIEW_H, json, lc_bounds):
     # ---- the map: built ONCE, empty; never re-runs for a parameter ---------------
     pair = PairMap(config=json.dumps({
         "height": VIEW_H, "home": dict(HOME), "labels": True, "labels_slot": LABELS_SLOT, "tile": RASTER_TILE,
-        "s2_year": S2_YEAR0, "label_year": LABEL_YEAR0, "fill": FILLS[0],
+        "s2_year": S2_YEAR0, "s2_scale": S2_SCALE0, "s2_gen": 0, "label_year": LABEL_YEAR0, "fill": FILLS[0],
         "s2_years": list(S2_YEARS), "label_years": list(LABEL_YEARS),
         "aef_from": AEF_FROM0, "aef_to": AEF_TO0, "aef_years": list(AEF_YEARS_ALL),
         "fills": [[f, FILL_SHORT[f], FILL_NAMES[f]] for f in FILLS],
@@ -1854,7 +1940,7 @@ def _(AEF_FROM0, AEF_TO0, AEF_YEARS_ALL, FILLS, FILL_NAMES, FILL_SHORT, HEX_ZOOM
     HOLD = {
         "frame": None, "sent": None, "box": None, "res": None, "vs": None,
         "busy": False, "pending": None, "pending_force": False, "task": None, "loop": None,
-        "s2y": S2_YEAR0, "ly": LABEL_YEAR0, "fill": FILLS[0], "labels": True, "perims": True,
+        "s2y": S2_YEAR0, "s2scale": S2_SCALE0, "s2gen": 0, "ly": LABEL_YEAR0, "fill": FILLS[0], "labels": True, "perims": True,
         "y0": AEF_FROM0, "y1": AEF_TO0,
         "hit": None, "memo": {}, "aef": {}, "mtbs": {}, "h_cam": None, "h_ctl": None, "h_pick": None,
         "runs": 0,
@@ -1892,6 +1978,7 @@ def _(
     pair,
     res_for_view,
     s2_raster_stats,
+    s2_set_scale,
     s2_tile_png,
     time,
     traceback,
@@ -2176,6 +2263,17 @@ def _(
                 HOLD["s2y"] = y
                 _cfg(s2_year=y)
                 _say((HOLD.get("last_status") or "") + f" · Sentinel-2 {y}")
+            return
+        if act == "s2scale":
+            try:
+                v = float(min(3.0, max(0.2, float(c.get("s2scale", HOLD["s2scale"])))))
+            except (TypeError, ValueError):
+                return
+            if s2_set_scale(v):
+                HOLD["s2scale"] = v
+                HOLD["s2gen"] += 1
+                _cfg(s2_scale=v, s2_gen=HOLD["s2gen"])
+                _say((HOLD.get("last_status") or "") + f" · Sentinel-2 scale {v:.1f}× · tiles re-served")
             return
         if act == "label":
             y = int(c.get("ly", HOLD["ly"]))

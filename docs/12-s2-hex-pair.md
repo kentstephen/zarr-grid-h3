@@ -78,8 +78,8 @@ should just show the raster, not hexified, as S2".
 
 Agreement score and its alpha, coverage scaling, verdict 2x2, difference
 clusters, boundaries / fill / hide, the res offset, the S2 index fill, the
-LCMS raster tiles, the raster-under machinery, the S2 gain slider, the
-analysis panel, the geocoder. Some may come back as a second pass once the
+LCMS raster tiles, the raster-under machinery, the
+analysis panel, the geocoder. (The S2 gain slider came back in round 4.) Some may come back as a second pass once the
 pair reads well on screen.
 
 ## Build log
@@ -379,3 +379,48 @@ pulls from GitHub, so it lags a push until reopened.
 Whether "AEF changed" should offer the largest step as well as the ends
 (the deck notebook's meaning) is not decided; the ends were the
 recommendation and Stephen took it.
+
+## Round 4 (2026-09-02): the S2 scale slider
+
+One commit on `s2-lcms-aef-mtbs-pair.py`, driven by Stephen: "a scale
+slider for s2 next to the years on the left map (brightness for
+observation)", "double click the scale slider to go back to 1.0", "if the
+scale is cheap let the results show live on the map as toggled and add
+debounce for rapid movement".
+
+**The slider.** The deck notebook's `scale` carried over, in the pair's
+own chrome: an uppercase eyebrow, a single blue handle on the AEF slider's
+track, a tabular readout ("1.0×"), 0.2 to 3.0 in tenths, on the left
+header's row beside the S2 year buttons. Keys `;` and `'` step it. A
+double-click on the track returns it to 1.0.
+
+**How it works.** The scale is a gain on the TCI bytes applied in the
+kernel where the tiles are composited. The composited RGBA tile is kept
+per (year, z, x, y) before the gain, so a scale change re-encodes from
+memory with no new reads; the PNG cache key carries the scale. On a
+change the kernel bumps `s2_gen` in the config; the S2 TileLayer's id
+carries that generation, so deck treats it as a new layer and asks for
+every tile in view again at the new gain. A year swap and a scale change
+are the same shape: a new layer id, a re-serve from the kernel.
+
+**Live, debounced.** Because a re-serve is a re-encode and not a read, the
+map follows the drag: every notch repaints the readout at once and arms a
+150 ms timer; the timer (or the release) sends the scale. A fast sweep is
+a handful of re-serves, not one per notch, and deck aborts the tiles of a
+layer it has already replaced.
+
+**DuckDB.** Stephen asked how the notebook uses it. Four places, all
+after the folds (the folds are DataFusion with the H3 UDF): the AlphaEarth
+COG index sliced per year over httpfs into a cached parquet; the frame
+join (LCMS fold LEFT JOIN each AlphaEarth year in the window, then MTBS)
+on one persistent connection; the clicked cell's row; and the two tables
+under the map. The community `h3` extension was loaded on that connection
+and nothing called it (the deck notebook's boundary dissolve did not come
+over), so the load is gone. It comes back if a dissolve or a parent walk
+lands here; the repo rule (DuckDB h3 for every H3 op past latlng -> cell)
+still stands.
+
+**Not flown.** The slider is checked by parse (`marimo check`, Node on the
+ESM) and not in a browser yet: the fit beside the S2 years, the lit span's
+width, and how the live re-serve feels under a drag are unverified on
+screen.
