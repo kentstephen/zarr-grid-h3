@@ -1078,7 +1078,7 @@ def _(
             D0 = float("nan")
         moved = when >= 0
         when_name = {
-            -1: f"AlphaEarth saw no change {y0} to {y1} (every step under the quiet level)",
+            -1: f"no single year stood out {y0} to {y1} (every step under the quiet level)",
             -2: "no AlphaEarth embedding here",
         }
         for ya, yb in step_years:
@@ -1182,7 +1182,7 @@ def _(
         )
         return {"cells": cells, "cellid": cellid, "p_built": p_built, "p_new": p_new, "byear": byear, "disp": disp, "when": when,
                 "years": years, "new_years": new_years, "y0": y0, "y1": y1, "steps": steps, "step_years": step_years,
-                "D0": D0, "fill": fill, "legend": legend, "score": score, "n_grew": n_grew}
+                "D0": D0, "shift_lo": lo, "shift_hi": hi, "fill": fill, "legend": legend, "score": score, "n_grew": n_grew}
 
     return (build_frame,)
 
@@ -2162,13 +2162,27 @@ def _(
                           f"{100 * pn:.2f}% of it was built {y0 + 1} to {y1} (under the {100 * NEW_MIN:g}% that counts as growth).")
                 else:
                     l1 = f"WSF: <b>{100 * pb:.0f}%</b> of this hexagon is built-up, all of it before {y0 + 1} (first seen {fd})."
-                if wn.startswith("no AlphaEarth"):
+                # BLUNT (Stephen): the fill paints the end-to-end shift, so the sentence
+                # speaks to that first; a year is named only when one step stood out
+                if wn.startswith("no AlphaEarth") or dsp is None or np.isnan(dsp):
                     l2 = "AlphaEarth has no embedding here."
-                elif wn.startswith("AlphaEarth saw no change"):
-                    l2 = f"AlphaEarth saw <b>no change</b> from {y0} to {y1}."
                 else:
-                    yr = wn.split("changed in ")[1].split(" ")[0]
-                    l2 = f"AlphaEarth saw the ground <b>change in {yr}</b>."
+                    s_lo, s_hi = fr.get("shift_lo", 0.0), fr.get("shift_hi", 1.0)
+                    t = (float(dsp) - s_lo) / max(s_hi - s_lo, 1e-9)
+                    if t >= 0.75:
+                        how = "moved <b>a lot</b>"
+                    elif t >= 0.4:
+                        how = "moved <b>a fair amount</b>"
+                    elif t >= 0.15:
+                        how = "moved <b>a little</b>"
+                    else:
+                        how = "<b>barely moved</b>"
+                    l2 = f"AlphaEarth: the ground's fingerprint {how} from {y0} to {y1} (shift {_f(dsp)}, this view runs {_f(s_lo)} to {_f(s_hi)})"
+                    if wn.startswith("no single year"):
+                        l2 += ", spread across the years rather than in any one of them." if t >= 0.4 else "; no single year stood out."
+                    else:
+                        yr = wn.split("changed in ")[1].split(" ")[0]
+                        l2 += f", most sharply in <b>{yr}</b>."
                 detail = (
                     f"shift {y0} to {y1} {_f(dsp)} · steps "
                     + " · ".join(f"{ya}→{yb} {_f(v)}" for (ya, yb), v in zip(fr["step_years"], row_steps))
