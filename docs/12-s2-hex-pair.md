@@ -295,3 +295,87 @@ Left out on purpose: `xsql-aef-lcms-s2-deck.py` (the reference copy from
 x-sql-marimo, untracked) and the earlier uncommitted storm-fence edits
 (`storm-fence-hex.py`, `docs/11-storm-fence-plan.md`), which are a
 different piece of work.
+
+## Round 3 (2026-09-01): the window, the slider, the strip
+
+Five commits after the first, all on `s2-lcms-aef-mtbs-pair.py`
+(b2c0071, d8a69cb, 114b311, 2cc8331, d8183ef), driven by Stephen looking
+at the fills and the strip.
+
+**The two AEF fills, said plainly.** Both come from the same numbers per
+hexagon: the 1 - cos between the cell's mean AlphaEarth vector in two
+years. "AEF changed" is a magnitude on the viridis ramp, no year attached.
+"AEF change year" is a verdict: the first consecutive step above the quiet
+level, one flat color per year. A hexagon can be bright on the ramp and any
+year on the verdict. The ramp is the biggest single move, not the sum of
+the moves, so a cell that burned and then kept changing as it regrew shows
+only its largest jump.
+
+**The window is a control.** The AEF window used to hang off the LCMS
+label year (Y-2..Y+1), so "when" was muddy: nobody chose the window. Now it
+is its own control, a from year and a to year over 2017..2025, opening at
+2020..2023 (what the old window was for 2022). "AEF changed" is the shift
+between the two ENDS (from vs to, whatever happened between); "AEF change
+year" is the first consecutive step inside the window above D0, painted by
+year (2021 blue, 2022 orange, 2023 purple as before; sky, teal, yellow,
+brown, near-black for the rest; no red). D0 is still the stable cells'
+quantile of their largest step. Nine years is the ceiling, not the default.
+
+**The control's shape, twice.** First a row of nine year buttons where a
+click moved the nearer end. Stephen: "not really intuitive", "this needs to
+be kind of simple and intuitive... a stepped two way slider". Three
+directions were named (before/after rows, the legend as a draggable
+timeline, a single scrubber with play); the answer was the simplest. It is
+now two range inputs on one track, whole-year steps, handles that never
+cross, the span lit, the window printed beside it. The kernel hears the
+release (change), not every notch (input), so a drag is one fold. Rendered
+alone in headless Chromium and driven by script: the handles clamp one
+year short of each other, each release sends one message.
+
+**Sentinel-2 2025.** The STAC stops at 2024, the bucket does not:
+`earthgenome/earthindeximagery/<tile>_2025-01-01_2026-01-01/` exists for
+every tile round Dixie (uploaded 2026-01-31, all bands and the TCI). A year
+the search does not return is built from the sibling year's path with the
+year swapped; a tile that is not there opens as None and reads as blank.
+S2 years are 2022..2025. No 2026 folder yet.
+
+**Full screen, the strip clipped.** Two wrong fixes before the right one.
+First a ResizeObserver on the strip re-measuring the panes; then a flex
+column with the strip scrolling past 45vh. Neither applied, because the
+widget lives in a shadow root and `document.fullscreenElement` is the
+shadow HOST, never our root, so `=== root` was always false and the
+full-screen layout never ran. The deck notebooks' HUD walks the shadow
+roots first (`realFs`). Same here now: in full screen the panes take the
+viewport and the strip floats over their foot, translucent, scrolling
+inside itself past 45vh.
+
+**The strip minimal.** Stephen: "it's kind of like machine language to
+me... comment out a lot of that printout". `STRIP_MINIMAL = True` hides the
+numbers line under the story, the status line (res, fold timings, tile
+counts) and the keys hint; the kernel still writes them and the flag brings
+them back. The quiet-level legend line is commented out. Then "we need some
+status like folding if it is": the status line shows while a fold runs
+("folding LCMS 2022 and AlphaEarth 2021 to 2024 (4 years)..."), after a
+failure (with the line number now), and when the hexagons are off for
+zoom; hidden once the fold lands. Everything in the strip is 14px ("i dont
+like tiny print"). The header is two rows: LCMS and FILL on the first, the
+AEF slider on the second.
+
+**The stall, and it was mine.** After the window change, small pans left
+the hexagons frozen at the old box and a click outside it read "AlphaEarth
+has no embedding here" with an LCMS class, so the frame WAS new and only
+the AEF was missing. Ran the folds headless for two boxes round Chester
+and Susanville: every year covered its box in full. The cause was in the
+serve loop: the frame key became `(ly, y0, y1, res, box)` and the fold
+cache still took `key[2]` as the box, which was now y1. Every pan folded
+LCMS fresh and reused the first box's AEF fold. The cache is keyed
+`(res, rbox)` by name now. Lesson kept: never index a tuple key by
+position; name the parts.
+
+**Badge.** "Open in molab" on the first cell, pointing at main. Molab
+pulls from GitHub, so it lags a push until reopened.
+
+**Open.** The widest window (nine AEF years) is unmeasured in the browser.
+Whether "AEF changed" should offer the largest step as well as the ends
+(the deck notebook's meaning) is not decided; the ends were the
+recommendation and Stephen took it.
