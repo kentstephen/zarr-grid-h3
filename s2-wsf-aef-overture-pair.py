@@ -19,7 +19,7 @@
 # ///
 
 
-"""S2 x WSF x AEF x Overture: the ground as a picture beside one H3 fill, one camera.
+"""S2 x WSF x AEF: the ground as a picture beside one H3 fill, one camera.
 
 Two maps in one widget. LEFT: Earth Genome's Sentinel-2 yearly mosaic (true
 color, 2022-2025) as tiles the kernel renders from the COGs; it is never
@@ -43,16 +43,17 @@ The window (from year, to year) is the one control both sides read. The
 build-year fill and the AEF change-year fill share one palette, so a hexagon
 that agrees is the same color on both.
 
-Overture Maps (Carl Boettiger's cboettig/overturemaps on source.coop, release
-2026-02-18.0): county boundaries on BOTH panes from the PMTiles, and the join
-of every cell to its county from the H3 res 8 partition (one row per county
-and res 8 cell, no geometry, no polyfill). Hover a boundary and the strip
-names the county; the tables under the map rank the view's counties.
-
 The fold is the H3 UDF inside DataFusion (repo rule): every raster's pixels
-cross as one Dataset and the cell is the GROUP BY. DuckDB h3 does the parent
-lookups for the county join. Nothing is tessellated in the kernel; the
-browser gets cell ids and rgba.
+cross as one Dataset and the cell is the GROUP BY. Nothing is tessellated in
+the kernel; the browser gets cell ids and rgba.
+
+Overture's division lines and the county join were here (Stephen,
+2026-09-02, at the New Capital: "we're not joining this massive data at
+country or even county level, they're not helpful, i say remove"). The fold
+is per hexagon; an admin line told it nothing. Gone with them: the gold lines,
+the hover name, the county tables, key B. The file name and the molab badge
+still say overture; rename them when this moves to its own repo (Stephen,
+2026-09-02: "i'm gonna probably move this to a new repo anyway").
 
 Run: uv run marimo edit s2-wsf-aef-overture-pair.py
 
@@ -60,8 +61,7 @@ Attribution: WSF Tracker (c) DLR and MindEarth, via source.coop
 (mindearth/wsf, DOI 10.5281/zenodo.20424537). "The AlphaEarth Foundations
 Satellite Embedding dataset is produced by Google and Google DeepMind."
 (CC-BY 4.0.) Sentinel-2 yearly mosaics by Earth Genome (Copernicus Sentinel
-data). Overture Maps Foundation divisions (CDLA Permissive 2.0) via
-cboettig/overturemaps on source.coop.
+data).
 
 TODO (Stephen, 2026-09-02): Overture BUILDINGS from the fused partition on
 source.coop as the next layer, drawn only zoomed in (the bias-bounty tutorial
@@ -166,11 +166,8 @@ def _(mo):
       the to end): whole years 2017 to 2025, read by both sources. Drag either
       handle; the frame is rebuilt when you let go (WSF is folded once per
       view; only the AlphaEarth years not yet held are fetched).
-    - **Overture lines** on both panes in gold, one level per zoom: states
-      below zoom 8, counties from 8. Key `B` hides them. Hover one and the
-      strip names it.
-    - Click a hexagon for its story: the county, what WSF says, when
-      AlphaEarth saw the ground change. `L` toggles the basemap labels, `F`
+    - Click a hexagon for its story: what WSF says, when AlphaEarth saw the
+      ground change. `L` toggles the basemap labels, `F`
       full screen.
 
     The two year fills share one palette: a hexagon that is the same color on
@@ -242,39 +239,9 @@ def _(os, tempfile):
     WSF_YEARS = tuple(range(2016, 2026))
     wsf_bounds = (-180.0, -60.01, 180.0, 78.01)
 
-    # ---- Overture divisions (cboettig/overturemaps, release 2026-02-18.0) -----
-    # counties/hex: one parquet per res 0 cell, one row per (county, res 8
-    # cell): the join. No row-group stats, so a read filters the h8 column by
-    # the id range of a res COUNTY_TILE_RES cell (3 s against 13 s for the
-    # whole file), one tile at a time, held in memory.
-    OVT = "https://data.source.coop/cboettig/overturemaps/2026-02-18.0"
-    COUNTY_HEX = OVT + "/counties/hex/h0={h0}/data_0.parquet"
-    COUNTY_TILE_RES = 2
-    # The LINES come from Overture's own divisions.pmtiles (one object, z0-12,
-    # CORS on the bucket): the `division_area` layer carries every subtype
-    # with `@name`. ONE level at a time by zoom, the canopy notebook's bands
-    # (Stephen, 2026-09-02: "states and the counties and the localities are
-    # zoom dependent just like in the other notebook"): states below zoom 8,
-    # counties from 8 (localities from 10 were tried and switched off, see
-    # DIVISION_BANDS). The floors are where the build
-    # first holds each subtype (counties z8, localities z10; maplibre does
-    # not underzoom, so a band cannot start before its tiles). All in the
-    # gold of the MTBS perimeters, one line, no casing ("just make it align
-    # ... I think gold"). cboettig's per-level PMTiles stop at counties; the
-    # h8 partition above stays the join.
-    DIVISIONS_PMTILES = "https://overturemaps-extras-us-west-2.s3.us-west-2.amazonaws.com/tiles/2026-08-19.0/divisions.pmtiles"
-    DIVISIONS_LAYER = "division_area"
-    # subtype, from zoom, to zoom, line px. Localities are OFF (Stephen,
-    # 2026-09-02, Las Vegas at zoom 11: "these look like neighborhoods or
-    # microhoods, getting in the way of observation. comment out locality for
-    # now"); put the third band back and end the county band at 10 to try
-    # them again.
-    DIVISION_BANDS = [["region", 0, 8, 2.2], ["county", 8, 24, 1.6]]
-    # DIVISION_BANDS = [["region", 0, 8, 2.2], ["county", 8, 10, 1.6], ["locality", 10, 24, 1.2]]
-
     VIEW_W, VIEW_H = 700, 720  # one pane
-    # the strip under the map, minimal (Stephen, 2026-09-01): the legend, the
-    # county under the pointer and the story stay; the status line (res, fold
+    # the strip under the map, minimal (Stephen, 2026-09-01): the legend and
+    # the story stay; the status line (res, fold
     # timings, tile counts) and the keys hint are hidden. Flip to bring them
     # back; the kernel still writes them.
     STRIP_MINIMAL = True
@@ -283,11 +250,13 @@ def _(os, tempfile):
     HEX_ZOOM = 9.0
     LABELS_SLOT = "watername_ocean"
     RASTER_TILE = 256
-    # home: Paradise, California. The Camp Fire (November 2018) took most of
-    # the town; WSF dates the rebuilding half-year by half-year, and the
-    # mosaics 2022-2025 show the roofs coming back. Zoomed to the second
-    # hexagon rung (res 8 at this pane).
-    HOME = {"longitude": -121.60, "latitude": 39.76, "zoom": 10.2}
+    # home: Egypt's New Administrative Capital, 45 km east of Cairo. Bare
+    # desert in 2016, a city of ministries, towers and ring roads by 2025, all
+    # of it inside WSF's half-year record, and the skies clear enough that the
+    # S2 mosaics show every stage. Zoomed to the second hexagon rung (res 8
+    # at this pane). Paradise, California (the Camp Fire rebuild) was the
+    # first home: -121.60, 39.76.
+    HOME = {"longitude": 31.75, "latitude": 30.01, "zoom": 10.2}
 
     # a cell GREW when at least this share of its sampled pixels became
     # built-up inside the window; below it the cell counts as quiet for the
@@ -349,11 +318,6 @@ def _(os, tempfile):
         GREW_RAMP,
         CACHE_DIR,
         CELL_BUDGET,
-        COUNTY_HEX,
-        COUNTY_TILE_RES,
-        DIVISIONS_LAYER,
-        DIVISIONS_PMTILES,
-        DIVISION_BANDS,
         FA,
         FILLS,
         FILL_NAMES,
@@ -1004,104 +968,10 @@ def _(
 
 
 @app.cell
-def _(COUNTY_HEX, COUNTY_TILE_RES, asyncio, coordinates_to_cells, duckdb, np, pa, time):
-    # ---- Overture counties: the H3 res 8 partition, the join without geometry --
-    # One row per (county, res 8 cell) in cboettig's partition. The cells of a
-    # box are looked up by their res 8 parent (finer frames) or by the parent
-    # of the h8 rows (coarser frames), in DuckDB h3 (repo rule: h3ronpy only
-    # for latlng -> cell, DuckDB h3 for everything else). A border cell sits
-    # in more than one county (11% of the rows): the join keeps the first by
-    # name and flags it `border`. Tiles are res COUNTY_TILE_RES cells, read
-    # once each by the h8 id range (no row-group stats in the file, but the
-    # id column alone scans in 3 s where the strings take 13).
+def _(duckdb):
+    # ---- DuckDB: the frame's join and the tables under the map --------------
     con = duckdb.connect()
-    con.execute("INSTALL httpfs; LOAD httpfs; INSTALL h3 FROM community; LOAD h3;")
-    _have = {}  # res COUNTY_TILE_RES cell -> arrow (h8, county, region, cid)
-    _lock = asyncio.Lock()
-
-    def _tiles_for(box):
-        W_, S_, E_, N_ = box
-        lon, lat = np.meshgrid(np.linspace(W_, E_, 7), np.linspace(S_, N_, 7))
-        cells = np.asarray(coordinates_to_cells(lat.ravel(), lon.ravel(), COUNTY_TILE_RES), dtype=np.uint64)
-        return sorted(set(int(c) for c in cells))
-
-    def _read(h0, tiles):
-        rng = con.execute(
-            "SELECT t.c, (SELECT min(x) FROM unnest(h3_cell_to_children(t.c, 8)) AS u(x)), "
-            "(SELECT max(x) FROM unnest(h3_cell_to_children(t.c, 8)) AS u(x)) "
-            "FROM (SELECT unnest(?::UBIGINT[]) AS c) t", [tiles]
-        ).fetchall()
-        where = " OR ".join(f"(h8 BETWEEN {lo} AND {hi})" for _, lo, hi in rng)
-        tab = con.execute(f"""
-            SELECT h8, name_en AS county, region, id AS cid, h3_cell_to_parent(h8, {COUNTY_TILE_RES}) AS tile
-            FROM read_parquet('{COUNTY_HEX.format(h0=h0)}') WHERE {where}
-        """).arrow().read_all()
-        return tab
-
-    async def county_rows(box):
-        """The (h8, county, region) rows of every res COUNTY_TILE_RES tile the box
-        touches, one arrow table, and a stats string."""
-        t0 = time.time()
-        tiles = _tiles_for(box)
-        need = [t for t in tiles if t not in _have]
-        fetched = 0
-        if need:
-            async with _lock:
-                need = [t for t in tiles if t not in _have]
-                by_h0 = {}
-                for t in need:
-                    h0 = con.execute("SELECT h3_cell_to_parent(?::UBIGINT, 0)", [t]).fetchone()[0]
-                    by_h0.setdefault(int(h0), []).append(t)
-                loop = asyncio.get_running_loop()
-                for h0, ts in by_h0.items():
-                    try:
-                        tab = await loop.run_in_executor(None, _read, h0, ts)
-                    except Exception:
-                        tab = None  # a res 0 cell with no counties file (ocean, or a country without counties)
-                    for t in ts:
-                        if tab is None or tab.num_rows == 0:
-                            _have[t] = None
-                        else:
-                            m = pa.compute.equal(tab["tile"], pa.scalar(t, pa.uint64()))
-                            _have[t] = tab.filter(m).drop_columns(["tile"])
-                        fetched += 1
-        parts = [_have[t] for t in tiles if _have.get(t) is not None]
-        if not parts:
-            return None, f"counties: none under the view ({time.time() - t0:.1f} s)"
-        tab = pa.concat_tables(parts)
-        return tab, f"counties {tab.num_rows:,} h8 rows, {fetched} tiles fetched {time.time() - t0:.1f} s"
-
-    def county_for_cells(cells, res, rows):
-        """(cell, county, region, border) for every cell in `cells` (uint64
-        array), from the h8 rows; county NULL where Overture has none."""
-        out = pa.table({"cell": pa.array(np.asarray(cells, dtype=np.uint64), pa.uint64())})
-        if rows is None or rows.num_rows == 0:
-            n = out.num_rows
-            return out.append_column("county", pa.nulls(n, pa.string())).append_column("region", pa.nulls(n, pa.string())).append_column("border", pa.array([False] * n))
-        con.register("cty_cells", out)
-        con.register("cty_rows", rows)
-        if res >= 8:
-            q = f"""
-                SELECT c.cell,
-                       min(r.county) AS county, arg_min(r.region, r.county) AS region,
-                       count(DISTINCT r.county) > 1 AS border
-                FROM cty_cells c LEFT JOIN cty_rows r ON r.h8 = h3_cell_to_parent(c.cell, 8)
-                GROUP BY c.cell ORDER BY c.cell
-            """
-        else:
-            q = f"""
-                WITH p AS (
-                    SELECT h3_cell_to_parent(h8, {res}) AS cell, county, region, count(*) AS n
-                    FROM cty_rows GROUP BY 1, 2, 3
-                )
-                SELECT c.cell, arg_max(p.county, p.n) AS county, arg_max(p.region, p.n) AS region,
-                       count(DISTINCT p.county) > 1 AS border
-                FROM cty_cells c LEFT JOIN p USING (cell)
-                GROUP BY c.cell ORDER BY c.cell
-            """
-        return con.execute(q).arrow().read_all()
-
-    return con, county_for_cells, county_rows
+    return (con,)
 
 
 @app.cell
@@ -1136,10 +1006,10 @@ def _(
     _E = [f"e{i:02d}" for i in range(64)]
     _GREY = np.array([128, 128, 128], np.uint8)
 
-    def build_frame(wsf_cells, aef_by_year, y0, y1, cty):
+    def build_frame(wsf_cells, aef_by_year, y0, y1):
         """Join the WSF fold with each AlphaEarth year in the window y0..y1
-        (LEFT: a cell keeps its WSF counts with or without an embedding) and
-        with the county lookup. From the 20 date counts: `p_built` (built-up
+        (LEFT: a cell keeps its WSF counts with or without an embedding).
+        From the 20 date counts: `p_built` (built-up
         by the end of y1), `p_new` (became built-up in y0+1..y1, the years the
         y0 and y1 composites straddle), `byear` (the year with most of the new
         pixels). `disp` is the displacement between the two ENDS (1 - cos of
@@ -1148,10 +1018,9 @@ def _(
         cells WSF says did not grow) and `when`, the year of the first step
         above D0: the "AEF change year" fill."""
         con.register("wsf_cells", wsf_cells)
-        con.register("cty_cells2", cty)
         years = [y for y in range(y0, y1 + 1) if aef_by_year.get(y) is not None]
-        sel = ["w.*", "k.county", "k.region", "k.border"]
-        joins = ["LEFT JOIN cty_cells2 k USING (cell)"]
+        sel = ["w.*"]
+        joins = []
         for y in years:
             con.register(f"aef_{y}", aef_by_year[y])
             sel += [f"a{y}.{e} AS {e}_{y}" for e in _E]
@@ -1215,12 +1084,8 @@ def _(
         byear_name = {-1: f"built-up before {y0 + 1}, nothing new to {y1}", -3: "nothing built-up here"}
         for y in new_years:
             byear_name[y] = f"most new built-up ground arrived in {y}"
-        county = j["county"].to_pylist()
         cells = pa.table({
             "cell": j["cell"],
-            "county": j["county"],
-            "region": j["region"],
-            "border": j["border"],
             "npx": j["npx"],
             "p_built": pa.array(p_built),
             "p_new": pa.array(p_new),
@@ -1315,7 +1180,7 @@ def _(
         )
         return {"cells": cells, "cellid": cellid, "p_built": p_built, "p_new": p_new, "byear": byear, "disp": disp, "when": when,
                 "years": years, "new_years": new_years, "y0": y0, "y1": y1, "steps": steps, "step_years": step_years,
-                "D0": D0, "fill": fill, "legend": legend, "score": score, "n_grew": n_grew, "county": county}
+                "D0": D0, "fill": fill, "legend": legend, "score": score, "n_grew": n_grew}
 
     return (build_frame,)
 
@@ -1326,16 +1191,14 @@ def _(anywidget, asyncio, traitlets):
         """Two maplibre maps in a row, one camera. LEFT: the S2 mosaic as tiles the
         kernel renders (custom messages, PNG bytes back), keyed by year. RIGHT:
         an H3HexagonLayer (highPrecision) from cell ids + rgba, or the WSF
-        pyramid as tiles below the hexagon zoom. Overture county lines on both
-        panes from the PMTiles. Hover on either pane: h3-js cell at the frame's
-        res, its ring drawn on BOTH panes.
+        pyramid as tiles below the hexagon zoom. Hover on either pane: h3-js
+        cell at the frame's res, its ring drawn on BOTH panes.
 
         Kernel -> browser: `cells` (uint64 LE), `colors` (rgba u8), `config`
         (JSON), `status` / `panel` / `legend` (strings for the strip).
         Browser -> kernel: `view` (JSON lon/lat/zoom + the pane's w/h on every
-        moveend), `pick` (JSON: the clicked cell as hex, or null, and the
-        counties under the click), `ctl` (JSON: s2 year, s2 scale, the window,
-        fill, labels, bounds)."""
+        moveend), `pick` (JSON: the clicked cell as hex, or null), `ctl`
+        (JSON: s2 year, s2 scale, the window, fill, labels)."""
 
         cells = traitlets.Bytes(b"").tag(sync=True)
         colors = traitlets.Bytes(b"").tag(sync=True)
@@ -1382,10 +1245,6 @@ def _(anywidget, asyncio, traitlets):
         import {BitmapLayer, PathLayer} from "https://esm.sh/@deck.gl/layers@9.3.10?deps=@deck.gl/core@9.3.10,apache-arrow@18.1.0";
         import {TileLayer, H3HexagonLayer} from "https://esm.sh/@deck.gl/geo-layers@9.3.10?deps=@deck.gl/core@9.3.10,@deck.gl/extensions@9.3.10,@deck.gl/layers@9.3.10,@deck.gl/mesh-layers@9.3.10,apache-arrow@18.1.0";
         import {latLngToCell, getResolution, cellToBoundary} from "https://esm.sh/h3-js@4.5.0";
-        import {Protocol as PMProtocol} from "https://esm.sh/pmtiles@3.2.1";
-
-        // the PMTiles protocol, registered once per page (maplibre keeps a global table)
-        if (!window.__spPM) { window.__spPM = new PMProtocol(); maplibregl.addProtocol("pmtiles", window.__spPM.tile); }
 
         const STYLE = "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json";
 
@@ -1439,11 +1298,7 @@ def _(anywidget, asyncio, traitlets):
           const panel = document.createElement("div");
           panel.className = "sp-panel";
           panel.style.cssText = "font-size:14px";
-          // the county under the pointer (the tile's own attributes, no kernel)
-          const place = document.createElement("div");
-          place.className = "sp-place";
-          place.style.cssText = "font-size:14px;min-height:1.2em;color:#444";
-          strip.append(legend, place, panel, status);
+          strip.append(legend, panel, status);
           status.hidden = !!cfg.minimal;  // STRIP_MINIMAL: see say()
           root.append(row, strip);
           el.append(css, root);
@@ -1454,10 +1309,9 @@ def _(anywidget, asyncio, traitlets):
           const onCss = (b, on) => { b.style.background = on ? ACCENT : "transparent"; b.style.color = on ? "#fff" : "#1d1d1b"; };
           let s2y = cfg.s2_year, fill = cfg.fill || "built", labelsOn = cfg.labels !== false;
           let s2scale = Number(cfg.s2_scale) || 1;  // the S2 mosaic's gain
-          let boundsOn = cfg.bounds !== false;
           let y0 = cfg.aef_from, y1 = cfg.aef_to;
           const send = (act) => {
-            model.set("ctl", JSON.stringify({act, s2y, s2scale, fill, y0, y1, labels: labelsOn, bounds: boundsOn, n: Date.now()}));
+            model.set("ctl", JSON.stringify({act, s2y, s2scale, fill, y0, y1, labels: labelsOn, n: Date.now()}));
             model.save_changes();
           };
           // an eyebrow label + a segmented control (joined buttons, one border)
@@ -1636,7 +1490,7 @@ def _(anywidget, asyncio, traitlets):
           window.addEventListener("resize", () => { paneHeight(); });
           const hint = document.createElement("div");
           hint.style.cssText = mono + ";opacity:.55";
-          hint.textContent = "keys: [ ] S2 year · ; ' S2 scale · 1-5 fill · - = window from · _ + window to · B division lines · L labels · F full screen · hover a line for the county · click a hexagon for its row";
+          hint.textContent = "keys: [ ] S2 year · ; ' S2 scale · 1-5 fill · - = window from · _ + window to · L labels · F full screen · click a hexagon for its row";
           hint.style.color = "#666";
           strip.appendChild(hint);
           hint.hidden = !!cfg.minimal;
@@ -1651,7 +1505,6 @@ def _(anywidget, asyncio, traitlets):
             else if (k === "-" || k === "=") { const v = step(aefYears, y0, k === "=" ? 1 : -1); if (v < y1) { y0 = v; styleAef(); aefRelease(); } }
             else if (k === "_" || k === "+") { const v = step(aefYears, y1, k === "+" ? 1 : -1); if (v > y0) { y1 = v; styleAef(); aefRelease(); } }
             else if (k === "l" || k === "L") { labelsOn = !labelsOn; labels(labelsOn); send("labels"); }
-            else if (k === "b" || k === "B") { boundsOn = !boundsOn; bounds(); send("bounds"); }
             else if (k === "f" || k === "F") { toggleFull(); }
             else return;
             e.preventDefault();
@@ -1742,11 +1595,9 @@ def _(anywidget, asyncio, traitlets):
           // ---- the layers ---------------------------------------------------
           let mapL = null, mapR = null, ovL = null, ovR = null;
           let hover = null;  // the hovered cell (hex string), mirrored on both panes
-          // deck's layers go under the county lines once those exist (they
-          // are added before the first update), else under the labels
+          // deck's layers go under the basemap labels
           const labelSlot = () => cfg.labels_slot || "watername_ocean";
-          const slotFor = (m) => (m && m.getLayer && m.getLayer("div-hit")) ? "div-hit" : labelSlot();
-          let slot = labelSlot;  // rebound per pane inside layersLeft / layersRight
+          const slot = labelSlot;
           const ring = (h) => { try { return cellToBoundary(h, true); } catch (e) { return null; } };
           const outline = (id, h, color, width) => {
             const r = h ? ring(h) : null;
@@ -1775,7 +1626,6 @@ def _(anywidget, asyncio, traitlets):
           });
           const hexZoomOk = () => !!mapR && mapR.getZoom() >= (cfg.hex_zoom || 9);
           function layersLeft() {
-            slot = () => slotFor(mapL);
             const out = [];
             out.push(mkRaster("s2", cfg.s2_year, 14, null, true));
             const h = outline("hover-l", hover, [255, 255, 255, 255], 2);
@@ -1785,7 +1635,6 @@ def _(anywidget, asyncio, traitlets):
             return out;
           }
           function layersRight() {
-            slot = () => slotFor(mapR);
             const out = [];
             // the WSF raster: below the hexagon zoom (the pyramid, the earliest
             // built-up date under each pixel) and whenever the fill is `built`
@@ -1809,49 +1658,6 @@ def _(anywidget, asyncio, traitlets):
             if (pk) out.push(pk);
             return out;
           }
-          // Overture division lines: a maplibre vector source per map from
-          // Overture's own divisions PMTiles. ONE subtype per zoom band (states
-          // below 8, counties from 8, localities switched off; the canopy
-          // notebook's ladder), each a gold line (the MTBS perimeters' gold), no casing;
-          // an invisible fill per band for the hit test; under the labels.
-          const BND = cfg.bounds_src, BLAYER = cfg.bounds_layer;
-          const BANDS = cfg.bands || [["region", 0, 8, 2.2], ["county", 8, 24, 1.6]];
-          const GOLD = "#ffc828";
-          const bandAt = (z) => BANDS.find((b) => z >= b[1] && z < b[2]) || null;
-          const divIds = () => BANDS.flatMap((b) => ["div-" + b[0], "div-hit-" + b[0]]);
-          function addBounds(m) {
-            if (!BND || m.getSource("div")) return;
-            try {
-              m.addSource("div", {type: "vector", url: "pmtiles://" + BND});
-              const before = m.getLayer(labelSlot()) ? labelSlot() : undefined;
-              // one hit layer named div-hit so deck's slot lands under every band
-              m.addLayer({id: "div-hit", type: "fill", source: "div", "source-layer": BLAYER,
-                filter: ["==", ["get", "subtype"], "__none__"], paint: {"fill-color": "#000", "fill-opacity": 0}}, before);
-              for (const [sub, z0, z1, px] of BANDS) {
-                m.addLayer({id: "div-hit-" + sub, type: "fill", source: "div", "source-layer": BLAYER,
-                  minzoom: z0, maxzoom: z1, filter: ["==", ["get", "subtype"], sub],
-                  paint: {"fill-color": "#000", "fill-opacity": 0}}, before);
-                m.addLayer({id: "div-" + sub, type: "line", source: "div", "source-layer": BLAYER,
-                  minzoom: z0, maxzoom: z1, filter: ["==", ["get", "subtype"], sub],
-                  paint: {"line-color": GOLD, "line-width": px, "line-opacity": 0.95}}, before);
-              }
-            } catch (e) { say("division lines: " + e.message); }
-          }
-          function bounds() {
-            for (const m of [mapL, mapR]) {
-              if (!m || !m.getSource("div")) continue;
-              for (const id of divIds()) m.setLayoutProperty(id, "visibility", boundsOn ? "visible" : "none");
-            }
-          }
-          const placesAt = (m, pt) => {
-            if (!m || !m.getSource("div")) return [];
-            try {
-              const b = bandAt(m.getZoom());
-              if (!b) return [];
-              return m.queryRenderedFeatures(pt, {layers: ["div-hit-" + b[0]]}).map((f) => ({
-                name: f.properties["@name"], sub: f.properties.subtype, region: f.properties.region, country: f.properties.country, id: f.properties.division_id || f.properties.id}));
-            } catch (e) { return []; }
-          };
           function update() {
             if (ovL) ovL.setProps({layers: layersLeft()});
             if (ovR) ovR.setProps({layers: layersRight()});
@@ -1897,13 +1703,16 @@ def _(anywidget, asyncio, traitlets):
             const mk = (elm) => new maplibregl.Map({
               container: elm, style: STYLE,
               center: [home.longitude, home.latitude], zoom: home.zoom,
-              attributionControl: {compact: true},
+              // the credit in full (Carto, OpenStreetMap): compact hid it behind
+              // an (i) that read as nothing (Stephen, 2026-09-02)
+              attributionControl: {compact: false},
             });
             mapL = mk(L.mapEl); mapR = mk(R.mapEl);
             // maplibre's own controls: full screen takes the WHOLE widget (both
             // panes and the strip), not the one map it sits on
             mapR.addControl(new maplibregl.FullscreenControl({container: root}), "top-right");
-            mapR.addControl(new maplibregl.NavigationControl({showCompass: false}), "bottom-right");
+            // the zoom buttons under full screen, the default maplibre column
+            mapR.addControl(new maplibregl.NavigationControl({showCompass: false}), "top-right");
             ovL = new MapboxOverlay({interleaved: true, layers: [], onError: (e) => say("deck L: " + (e && e.message ? e.message : e))});
             ovR = new MapboxOverlay({interleaved: true, layers: [], onError: (e) => say("deck R: " + (e && e.message ? e.message : e))});
             mapL.addControl(ovL); mapR.addControl(ovR);
@@ -1919,30 +1728,20 @@ def _(anywidget, asyncio, traitlets):
             mapL.on("move", follow(mapL, mapR));
             mapR.on("move", follow(mapR, mapL));
             let ready = 0;
-            const onLoad = () => { ready++; if (ready === 2) { labels(labelsOn); addBounds(mapL); addBounds(mapR); bounds(); update(); sendView(); } };
+            const onLoad = () => { ready++; if (ready === 2) { labels(labelsOn); update(); sendView(); } };
             mapL.on("load", onLoad); mapR.on("load", onLoad);
             mapL.on("moveend", sendView); mapR.on("moveend", sendView);
             mapL.on("zoom", () => update());
             mapR.on("zoom", () => update());
             for (const [m, other] of [[mapL, mapR], [mapR, mapL]]) {
-              let lastPlace = "";
               m.on("mousemove", (e) => {
                 const h = cellAt(e.lngLat);
                 if (h !== hover) { hover = h; updateHover(); }
-                const ps = placesAt(m, e.point), seen = new Set(), parts = [];
-                for (const q of ps) { const k = q.id || q.name; if (seen.has(k)) continue; seen.add(k);
-                  parts.push(q.name || "?"); }
-                const t = parts.join(" · ");
-                if (t !== lastPlace) { lastPlace = t; place.textContent = t; }
               });
-              m.on("mouseout", () => { if (hover) { hover = null; updateHover(); } if (lastPlace) { lastPlace = ""; place.textContent = ""; } });
+              m.on("mouseout", () => { if (hover) { hover = null; updateHover(); } });
               m.on("click", (e) => {
                 const h = cellAt(e.lngLat);
-                // the counties under the click: polygons in the tiles, so a
-                // point inside one hits its invisible fill's feature
-                const seen = new Set(), places = [];
-                for (const q of placesAt(m, e.point)) { const k = q.id || q.name; if (!seen.has(k)) { seen.add(k); places.push(q); } }
-                model.set("pick", JSON.stringify({cell: h, lon: e.lngLat.lng, lat: e.lngLat.lat, places, n: ++seq}));
+                model.set("pick", JSON.stringify({cell: h, lon: e.lngLat.lng, lat: e.lngLat.lat, n: ++seq}));
                 model.save_changes();
               });
               m.on("error", (ev) => { if (ev && ev.error && ev.error.message) say("map: " + ev.error.message); });
@@ -1970,7 +1769,6 @@ def _(anywidget, asyncio, traitlets):
             if (Number(cfg.s2_scale) && Number(cfg.s2_scale) !== s2scale) { s2scale = Number(cfg.s2_scale); scSent = s2scale; styleSc(); }
             if (cfg.fill && cfg.fill !== fill) { fill = cfg.fill; styleFill(); }
             if (cfg.labels !== was.labels) { labelsOn = cfg.labels !== false; labels(labelsOn); }
-            if (cfg.bounds !== was.bounds) { boundsOn = cfg.bounds !== false; bounds(); }
             update();
           });
           try { grab("cells"); grab("colors"); loadCells(); loadAttrs(); renderLegend(); say(model.get("status")); boot(); }
@@ -1984,7 +1782,7 @@ def _(anywidget, asyncio, traitlets):
 
 
 @app.cell
-def _(AEF_FROM0, AEF_TO0, AEF_YEARS_ALL, DIVISIONS_LAYER, DIVISIONS_PMTILES, DIVISION_BANDS, FILLS, FILL_NAMES, FILL_SHORT, HEX_ZOOM, HOME, LABELS_SLOT, PairMap, RASTER_TILE, S2_SCALE0, S2_YEAR0, S2_YEARS, STRIP_MINIMAL, VIEW_H, json, wsf_bounds):
+def _(AEF_FROM0, AEF_TO0, AEF_YEARS_ALL, FILLS, FILL_NAMES, FILL_SHORT, HEX_ZOOM, HOME, LABELS_SLOT, PairMap, RASTER_TILE, S2_SCALE0, S2_YEAR0, S2_YEARS, STRIP_MINIMAL, VIEW_H, json, wsf_bounds):
     # ---- the map: built ONCE, empty; never re-runs for a parameter ---------------
     pair = PairMap(config=json.dumps({
         "height": VIEW_H, "home": dict(HOME), "labels": True, "labels_slot": LABELS_SLOT, "tile": RASTER_TILE,
@@ -1993,15 +1791,14 @@ def _(AEF_FROM0, AEF_TO0, AEF_YEARS_ALL, DIVISIONS_LAYER, DIVISIONS_PMTILES, DIV
         "aef_from": AEF_FROM0, "aef_to": AEF_TO0, "aef_years": list(AEF_YEARS_ALL),
         "fills": [[f, FILL_SHORT[f], FILL_NAMES[f]] for f in FILLS],
         "hex_zoom": HEX_ZOOM, "extent": list(wsf_bounds),
-        "bounds": True, "bounds_src": DIVISIONS_PMTILES, "bounds_layer": DIVISIONS_LAYER, "bands": DIVISION_BANDS,
         "minimal": STRIP_MINIMAL,
     }))
     HOLD = {
         "frame": None, "sent": None, "box": None, "res": None, "vs": None,
         "busy": False, "pending": None, "pending_force": False, "task": None, "loop": None,
-        "s2y": S2_YEAR0, "s2scale": S2_SCALE0, "s2gen": 0, "fill": FILLS[0], "labels": True, "bounds": True,
+        "s2y": S2_YEAR0, "s2scale": S2_SCALE0, "s2gen": 0, "fill": FILLS[0], "labels": True,
         "y0": AEF_FROM0, "y1": AEF_TO0,
-        "hit": None, "memo": {}, "aef": {}, "wsf": {}, "cty": {}, "h_cam": None, "h_ctl": None, "h_pick": None,
+        "hit": None, "memo": {}, "aef": {}, "wsf": {}, "h_cam": None, "h_ctl": None, "h_pick": None,
         "runs": 0,
     }
     pair
@@ -2026,8 +1823,6 @@ def _(
     build_frame,
     con,
     contains,
-    county_for_cells,
-    county_rows,
     json,
     np,
     pad_box,
@@ -2133,14 +1928,12 @@ def _(
             wneed = bkey not in HOLD["wsf"]
             got = await asyncio.gather(
                 wsf_fold(box, res) if wneed else asyncio.sleep(0, result=HOLD["wsf"].get(bkey)),
-                county_rows(box),
                 *(aef_fold(box, res, y) for y in need),
             )
             nw, s1 = got[0]
             if wneed:
                 HOLD["wsf"][bkey] = (nw, s1)
-            rows, s0 = got[1]
-            for y, (tab, st) in zip(need, got[2:2 + len(need)]):
+            for y, (tab, st) in zip(need, got[1:1 + len(need)]):
                 HOLD["aef"][(y, bkey)] = (tab, st)
             for k_ in ("aef", "wsf"):
                 if len(HOLD[k_]) > 40:
@@ -2152,13 +1945,8 @@ def _(
             s2s = " · ".join(HOLD["aef"][(y, bkey)][1] for y in years if (y, bkey) in HOLD["aef"])
             t1 = time.time()
             loop = asyncio.get_running_loop()
-            if bkey not in HOLD["cty"]:
-                HOLD["cty"][bkey] = await loop.run_in_executor(None, county_for_cells, nw["cell"].to_numpy(), res, rows)
-                if len(HOLD["cty"]) > 40:
-                    HOLD["cty"].pop(next(iter(HOLD["cty"])))
-            cty = HOLD["cty"][bkey]
-            fr = await loop.run_in_executor(None, build_frame, nw, aef_by_year, y0, y1, cty)
-            stats = " · ".join(x for x in (f"res {res}", s1, s0, s2s, f"frame {time.time() - t1:.1f} s") if x)
+            fr = await loop.run_in_executor(None, build_frame, nw, aef_by_year, y0, y1)
+            stats = " · ".join(x for x in (f"res {res}", s1, s2s, f"frame {time.time() - t1:.1f} s") if x)
             HOLD["memo"][key] = (fr, stats)
             if len(HOLD["memo"]) > 12:
                 HOLD["memo"].pop(next(iter(HOLD["memo"])))
@@ -2242,16 +2030,15 @@ def _(
             return
         try:
             cellh = p.get("cell")
-            places = p.get("places") or []
             if not cellh:
                 HOLD["hit"] = None
-                pair.panel = " · ".join(f"<b>{q.get('name') or '?'}</b>" for q in places) if places else ""
+                pair.panel = ""
                 _paint()
                 return
             cell = int(cellh, 16)
             con.register("cur_cells", fr["cells"])
             r = con.execute(
-                "SELECT county, region, border, p_built, p_new, byear, byear_name, first_date, disp, disp_max, when_name "
+                "SELECT p_built, p_new, byear, byear_name, first_date, disp, disp_max, when_name "
                 "FROM cur_cells WHERE cell = ?", [cell]
             ).fetchone()
             ci = int(np.searchsorted(fr["cellid"], np.uint64(cell)))
@@ -2263,11 +2050,10 @@ def _(
                 pair.panel = f"<span style='opacity:.7'>{cellh}{where}: not in the current frame</span>"
             else:
                 HOLD["hit"] = cell if HOLD["hit"] != cell else None
-                cty, reg, border, pb, pn, by, byn, fd, dsp, dmx, wn = r
+                pb, pn, by, byn, fd, dsp, dmx, wn = r
                 y0, y1 = fr["y0"], fr["y1"]
                 d0 = fr["D0"]
                 # BLUNT (Stephen): one plain sentence per source, then the numbers small
-                l0 = (f"<b>{cty}</b>, {reg}." + (" (on a county line)" if border else "")) if cty else "No Overture county here."
                 if pb <= 0:
                     l1 = "WSF sees no built-up ground here."
                 elif by >= 0:
@@ -2292,7 +2078,7 @@ def _(
                     + f" · first built-up {fd} · {CELL_KM2.get(HOLD['res'], 0):.3f} km²{where}"
                 )
                 pair.panel = (
-                    f"<div style='font-size:14px;line-height:1.5'>{l0}<br>{l1}<br>{l2}</div>"
+                    f"<div style='font-size:14px;line-height:1.5'>{l1}<br>{l2}</div>"
                     + ("" if STRIP_MINIMAL else f"<div style='font-size:12px;color:#777'>{detail}</div>")
                 )
         except Exception as e:
@@ -2350,10 +2136,6 @@ def _(
             HOLD["labels"] = bool(c.get("labels", True))
             _cfg(labels=HOLD["labels"])
             return
-        if act == "bounds":
-            HOLD["bounds"] = bool(c.get("bounds", True))
-            _cfg(bounds=HOLD["bounds"])
-            return
 
     def _on_ctl(change):
         try:
@@ -2384,8 +2166,7 @@ def _(mo):
     ## Under the map
 
     DuckDB over the CURRENT view's cells (press the button after the map
-    settles): `county` / `region` (Overture, `border` when the cell sits in
-    more than one county), `npx` (sampled WSF pixels), `p_built` (built-up by
+    settles): `npx` (sampled WSF pixels), `p_built` (built-up by
     the end of the window), `p_new` (became built-up inside it), `grew`,
     `byear` / `byear_name` (the year most of the new ground arrived; -1 built
     before the window, -3 nothing built), `first_date` (the record's first
@@ -2394,9 +2175,7 @@ def _(mo):
     `step_YYYY` per step, `moved`, `when` (the year, or -1 never, -2 no
     embedding) / `when_name`.
 
-    The first table is the join become a number: the view's counties ranked by
-    the share of their sampled ground that became built-up inside the window.
-    The second crosses the two year fills: how many cells WSF and AlphaEarth
+    The table crosses the two year fills: how many cells WSF and AlphaEarth
     put in the same year.
     """)
     return
@@ -2413,24 +2192,6 @@ def _(mo):
 def _(HOLD, con, mo, tables_btn):
     mo.stop(not tables_btn.value or HOLD["frame"] is None, mo.md("*no view folded yet*"))
     con.register("view_cells", HOLD["frame"]["cells"])
-    per_county = mo.sql(
-        """
-        SELECT county, region, count(*) AS cells,
-               round(100 * sum(p_built * npx) / sum(npx), 2) AS pct_built,
-               round(100 * sum(p_new * npx) / sum(npx), 3) AS pct_new_in_window,
-               sum(CASE WHEN grew THEN 1 ELSE 0 END) AS cells_grew,
-               round(100 * avg(CASE WHEN moved THEN 1 ELSE 0 END) FILTER (WHERE disp IS NOT NULL), 1) AS pct_aef_moved,
-               sum(CASE WHEN grew AND moved THEN 1 ELSE 0 END) AS cells_both
-        FROM view_cells GROUP BY county, region ORDER BY pct_new_in_window DESC
-        """,
-        engine=con,
-    )
-    return (per_county,)
-
-
-@app.cell
-def _(HOLD, con, mo, tables_btn):
-    mo.stop(not tables_btn.value or HOLD["frame"] is None)
     year_by_year = mo.sql(
         """
         PIVOT (SELECT byear_name AS wsf, when_name AS aef FROM view_cells WHERE grew OR moved)
