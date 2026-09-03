@@ -71,6 +71,43 @@ notebook draws a lot of buildings only when zoomed in): noted, not started.
 
 ### Sentinel-2 (Earth Genome), AlphaEarth: unchanged from doc 12.
 
+One addition, 2026-09-03. Nusantara (Penajam Paser Utara, East Kalimantan)
+drew nothing in 2022: not a bug. Earth Genome publishes TWO Sentinel-2
+composites on the same STAC and the same source.coop host, same MGRS tiles,
+ids, band names, EPSG:3857 pyramid, different pixels:
+
+- `sentinel2-yearly-mosaics` (bucket `earthgenome/earthindeximagery`): the
+  Earth Index imagery, method undocumented, STAC licence `proprietary`
+  (the notebook credit says CC-BY 4.0: confirm on source.coop), 2022-2024 in
+  the STAC plus 2025 in the bucket. Cleaner where clouds are rare (Berlin
+  good_pxl_pct 0.99 vs 0.91), hollow where they never lift: the 2022 tiles
+  50MME/50MMD hold 0 valid pixels over the city, a cloud-shaped hole the
+  size of Balikpapan Bay across four tiles (good_pxl_pct 0.22, 0.56).
+- `sentinel2-temporal-mosaics` (bucket of the same name): documented, L2A
+  masked by SCL then the per-pixel median over the year, CC-BY 4.0, 2022 and
+  2023 only on this STAC. 43% (50MME) and 100% (50MMD) valid over the city
+  in 2022 (good_pxl_pct 0.72, 0.69).
+
+The pair keeps the yearly as primary (it alone has 2024 and 2025, where
+Nusantara's growth is) and BACKFILLS: `_stac` asks for both collections in
+one search, `_s2_items` lists the yearly footprints first and the same
+year's temporal footprints after them (ids suffixed `#fill`), and the tile
+compositor's first-to-paint-wins rule does the rest. Per year the kernel
+counts the painted pixels that came from the fill; the status line says
+"S2 2022: 41% of pixels backfilled from the temporal median" whenever the
+share is nonzero (cumulative over the tiles served, not the view). Checked:
+Nusantara z11/z13 2022 now paints fully, 100% from the fill; 2023 takes
+0.1%; Sacramento 2022/2024 take none. The two composites differ slightly in
+colour, so a backfilled frame is a patchwork and the strip says so. The
+indices deck (`xsql-aef-lcms-s2-deck.py`) is left on the yearly alone:
+mixing two composites inside one avg() per hexagon is not a picture problem,
+it is a measurement problem.
+
+When this notebook moves to its own repo, carry the temporal-mosaics credit
+with it (README / attribution block): "Sentinel-2 L2A temporal mosaics by
+Earth Genome, CC-BY 4.0, Copernicus Sentinel data", beside the yearly
+credit. And settle the yearly collection's licence line at the same time.
+
 ## What the notebook does
 
 - `wsf_fold(box, res)`: one strided window of level 0, pixels -> cells

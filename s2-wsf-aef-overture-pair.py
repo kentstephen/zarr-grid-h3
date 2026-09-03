@@ -60,8 +60,9 @@ Run: uv run marimo edit s2-wsf-aef-overture-pair.py
 Attribution: WSF Tracker (c) DLR and MindEarth, via source.coop
 (mindearth/wsf, DOI 10.5281/zenodo.20424537). "The AlphaEarth Foundations
 Satellite Embedding dataset is produced by Google and Google DeepMind."
-(CC-BY 4.0.) Sentinel-2 yearly mosaics by Earth Genome (Copernicus Sentinel
-data). Place search by Photon (komoot), OpenStreetMap data (ODbL).
+(CC-BY 4.0.) Sentinel-2 yearly mosaics and Sentinel-2 L2A temporal mosaics
+(CC-BY 4.0) by Earth Genome (Copernicus Sentinel data). Place search by Photon
+(komoot), OpenStreetMap data (ODbL).
 
 TODO (Stephen, 2026-09-02): Overture BUILDINGS from the fused partition on
 source.coop as the next layer, drawn only zoomed in (the bias-bounty tutorial
@@ -151,8 +152,13 @@ def _(mo):
     one H3 fill over the same camera. Pan either map and both move. Hover a
     hexagon on either side and its ring is drawn on both.
 
-    - **S2** (left header, keys `[` `]`): which mosaic, 2022 to 2025. The
-      `scale` slider is a gain on the picture. **FIND** under them: a Photon
+    - **S2** (left header, a slider, the arrow keys or `[` `]`): which
+      mosaic, 2022 to 2025; the picture follows the drag. The maps' own
+      keyboard is off, so the arrows work after a click on either map. The `scale` slider is a gain on
+      the picture. Where the yearly mosaic has a
+      hole (2022 over Nusantara: cloud all year), the same year's temporal
+      median (Earth Genome's other composite, 2022-2023) shows through, and
+      the status line says what share of the pixels came from it. **FIND** under them: a Photon
       geocoder; the hits drop down as you type, arrows or the mouse pick one,
       Enter or a click flies both maps there.
     - **FILL** (keys `1` to `5`): **WSF built**, the record itself as a
@@ -215,6 +221,15 @@ def _(os, tempfile):
 
     S2_STAC = "https://stac.earthgenome.org/search"
     S2_COLLECTION = "sentinel2-yearly-mosaics"
+    # Where the yearly mosaic is nodata, the same year's tile from Earth
+    # Genome's OTHER composite fills the hole pixel by pixel, under the yearly:
+    # `sentinel2-temporal-mosaics`, the SCL-masked yearly median (CC-BY 4.0,
+    # 2022 and 2023 only on this STAC). Found 2026-09-03 over Nusantara: the
+    # yearly 2022 tiles 50MME/50MMD hold 0 valid pixels over the city (a cloud
+    # hole the size of Balikpapan Bay, good_pxl_pct 0.22), the temporal ones
+    # 43% and 100%. The status line counts the filled pixels per year so the
+    # reader knows which frames are a patchwork of two composites.
+    S2_FILL_COLLECTION = "sentinel2-temporal-mosaics"
     # the mosaic pyramid ends at z9 (L5, 306 m); z7-8 are rendered from L5 by
     # decimation (a z7 tile reads up to nine 1024 px windows: slow, so no lower)
     S2_TILE_MIN_Z, S2_PYRAMID_Z, S2_TCI_MAX_Z = 7, 9, 14
@@ -335,6 +350,7 @@ def _(os, tempfile):
         PER_RES,
         RASTER_TILE,
         S2_COLLECTION,
+        S2_FILL_COLLECTION,
         S2_PYRAMID_Z,
         S2_SCALE0,
         S2_STAC,
@@ -796,6 +812,7 @@ def _(
     Image,
     RASTER_TILE,
     S2_COLLECTION,
+    S2_FILL_COLLECTION,
     S2_PYRAMID_Z,
     S2_SCALE0,
     S2_STAC,
@@ -816,7 +833,9 @@ def _(
     # composited in numpy (black = nodata -> alpha 0; first footprint to paint a
     # pixel wins), one PNG. The year lives in the item id
     # (`10SFJ_2024-01-01_2025-01-01`); the STAC datetime filter does not
-    # constrain these items, so it is enforced on the id.
+    # constrain these items, so it is enforced on the id. The yearly footprints
+    # come first, then the same year's S2_FILL_COLLECTION footprints (ids
+    # suffixed `#fill`): first-to-paint-wins is the backfill.
     _store = S3Store("us-west-2.opendata.source.coop", region="us-west-2", skip_signature=True)
     _R = 6378137.0
     _items = {}  # item id -> {tci: path, bbox}
@@ -827,6 +846,7 @@ def _(
     _arr = {}  # (year, z, x, y) -> the composited RGBA tile before the gain, or None
     _gain = {"v": float(S2_SCALE0)}  # the strip's `scale`
     _tstat = {"served": 0, "blank": 0, "ms": 0.0}
+    _fill = {}  # year -> [pixels painted by the fill collection, pixels painted]
 
     def _encode(key, out):
         """The gain (the header's `scale`) on the composited bytes, then PNG."""
@@ -841,7 +861,9 @@ def _(
         return _png[key]
 
     def _stac(box):
-        body = json.dumps({"collections": [S2_COLLECTION], "bbox": list(box), "limit": 100}).encode()
+        body = json.dumps(
+            {"collections": [S2_COLLECTION, S2_FILL_COLLECTION], "bbox": list(box), "limit": 200}
+        ).encode()
         req = urllib.request.Request(S2_STAC, data=body, headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=60) as r:
             return json.load(r)["features"]
@@ -850,10 +872,16 @@ def _(
         key = (year, tuple(round(v, 2) for v in box))
         if key not in _boxes:
             loop = asyncio.get_running_loop()
-            feats = await loop.run_in_executor(None, _stac, box)
-            ids = []
-            for f in feats:
+            both = await loop.run_in_executor(None, _stac, box)
+            feats = [f for f in both if f.get("collection") != S2_FILL_COLLECTION]
+            ids, fill_ids = [], []
+            for f in both:
                 if not f["id"].endswith(f"{year}-01-01_{year + 1}-01-01"):
+                    continue
+                if f.get("collection") == S2_FILL_COLLECTION:
+                    iid = f["id"] + "#fill"
+                    _items[iid] = {"tci": f["assets"]["TCI"]["href"].split("source.coop/")[1], "bbox": f.get("bbox"), "fill": True}
+                    fill_ids.append(iid)
                     continue
                 _items[f["id"]] = {"tci": f["assets"]["TCI"]["href"].split("source.coop/")[1], "bbox": f.get("bbox")}
                 ids.append(f["id"])
@@ -872,7 +900,7 @@ def _(
                     base = f["assets"]["TCI"]["href"].split("source.coop/")[1].rsplit("/", 2)[0]
                     _items[iid] = {"tci": f"{base}/{iid}/TCI.tif", "bbox": f.get("bbox")}
                     ids.append(iid)
-            _boxes[key] = ids
+            _boxes[key] = ids + fill_ids  # yearly first: the fill only paints what they left
         return _boxes[key]
 
     async def _get(rel):
@@ -950,6 +978,11 @@ def _(
             valid = okr[:, None] & okc[None, :] & (rgb.sum(2) > 0) & (out[..., 3] == 0)
             out[valid, :3] = rgb[valid]
             out[valid, 3] = 255
+            n_new = int(valid.sum())
+            fy = _fill.setdefault(year, [0, 0])
+            fy[1] += n_new
+            if _items[iid].get("fill"):
+                fy[0] += n_new
         if not out[..., 3].any():
             _tstat["blank"] += 1
             _png[key] = None
@@ -973,7 +1006,11 @@ def _(
         return True
 
     def s2_raster_stats():
-        return dict(_tstat, cached=len(_png), scale=_gain["v"])
+        """The tile counters, plus `fill`: for each year whose served tiles took
+        any pixels from S2_FILL_COLLECTION, the share of painted pixels that did
+        (over every tile served so far, not the view)."""
+        fill = {y: f / p for y, (f, p) in _fill.items() if f and p}
+        return dict(_tstat, cached=len(_png), scale=_gain["v"], fill=fill)
 
     return s2_raster_stats, s2_set_scale, s2_tile_png
 
@@ -1357,7 +1394,11 @@ def _(anywidget, asyncio, traitlets):
           const newRow = (head) => { const r = document.createElement("span"); r.style.cssText = "display:inline-flex;gap:.6rem;align-items:center"; head.appendChild(r); return r; };
           const rowOf = (head) => head.lastElementChild || newRow(head);
           const rowBreak = (head) => { newRow(head); };
-          const styleS2 = mkGroup(L.head, "S2", cfg.s2_years || [], () => s2y, (v) => { s2y = v; }, "s2", "sp-s2y");
+          // S2 year: a stepped one-handle slider, built below once the CSS is in
+          // (Stephen, 2026-09-03: "change it from buttons to a slider... as the
+          // cursor moves, it's cheap enough to load the data"). `styleS2` is
+          // assigned there; the [ ] keys and the cfg echo call it.
+          let styleS2 = () => {};
           const fills = (cfg.fills || []).map((f) => ({value: f[0], label: f[1], title: f[2]}));
           // FILL has the first row, the window slider the second
           const styleFill = mkGroup(R.head, "fill", fills, () => fill, (v) => { fill = v; }, "fill", "sp-fill");
@@ -1391,6 +1432,10 @@ def _(anywidget, asyncio, traitlets):
             ".sp-scale input::-moz-range-thumb{width:12px;height:12px;border-radius:50%;background:#2a5db0;border:2px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.35);cursor:grab}",
             ".sp-scale .trk{position:absolute;left:8px;right:8px;top:9px;height:4px;background:rgba(29,29,27,.22);border-radius:2px}",
             ".sp-scale .spn{position:absolute;left:8px;top:9px;height:4px;background:#2a5db0;border-radius:2px}",
+            // the S2 year: the scale slider's handle and track, the range's ticks
+            ".sp-year{height:30px}",
+            ".sp-year .tks{position:absolute;left:8px;right:8px;top:19px;display:flex;justify-content:space-between;font-size:9px;color:#6b6b68;line-height:1}",
+            ".sp-year .tks span{width:0;display:flex;justify-content:center}",
           ].join("\n");
           el.appendChild(sty);
           const aefWrap = document.createElement("span");
@@ -1441,6 +1486,38 @@ def _(anywidget, asyncio, traitlets):
           // where the tiles are composited, so a release drops the S2 tiles and
           // asks deck for them again. The kernel hears the release (change),
           // not every notch (input); the readout follows the drag.
+          const s2Years = cfg.s2_years || [];
+          const yrWrap = document.createElement("span");
+          yrWrap.style.cssText = "display:inline-flex;align-items:center;gap:.4rem";
+          const yrLab = document.createElement("span"); yrLab.textContent = "S2";
+          yrLab.style.cssText = "font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#6b6b68";
+          const yr = document.createElement("span"); yr.className = "sp-scale sp-year";
+          const yrTrk = document.createElement("span"); yrTrk.className = "trk";
+          const yrSpn = document.createElement("span"); yrSpn.className = "spn";
+          const yrTks = document.createElement("span"); yrTks.className = "tks";
+          for (const y of s2Years) { const t = document.createElement("span"); const i = document.createElement("i"); i.style.fontStyle = "normal"; i.textContent = String(y); t.appendChild(i); yrTks.appendChild(t); }
+          const yri = document.createElement("input"); yri.type = "range"; yri.min = 0; yri.max = Math.max(0, s2Years.length - 1); yri.step = 1;
+          yri.title = "which Sentinel-2 yearly mosaic is drawn; the tiles follow the drag (arrow keys, or [ and ])";
+          const yrTxt = document.createElement("span");
+          yrTxt.style.cssText = "font-variant-numeric:tabular-nums;min-width:2.6em";
+          yr.append(yrTrk, yrSpn, yrTks, yri);
+          yrWrap.append(yrLab, yr, yrTxt);
+          rowOf(L.head).appendChild(yrWrap);
+          styleS2 = () => {
+            const i = Math.max(0, s2Years.indexOf(s2y)), n = Math.max(1, s2Years.length - 1);
+            yri.value = i;
+            yrSpn.style.width = Math.max(0, (yr.clientWidth - 16) * i / n) + "px";
+            yrTxt.textContent = String(s2y);
+          };
+          // the tiles follow the drag: a year is one cfg echo and a layer swap,
+          // and a year already seen is served from the kernel's PNG cache, so
+          // every notch can go, debounced like the scale below
+          let yrSent = s2y, yrTimer = null;
+          const yrRelease = () => { if (yrTimer) { clearTimeout(yrTimer); yrTimer = null; } if (s2y !== yrSent) { yrSent = s2y; send("s2"); } };
+          yri.addEventListener("input", () => { s2y = s2Years[Number(yri.value)]; styleS2(); if (yrTimer) clearTimeout(yrTimer); yrTimer = setTimeout(yrRelease, 150); });
+          yri.addEventListener("change", yrRelease);
+          setTimeout(styleS2, 0);
+          try { new ResizeObserver(styleS2).observe(yr); } catch (e) {}
           const SC_MIN = 0.2, SC_MAX = 3;
           const scWrap = document.createElement("span");
           scWrap.style.cssText = "display:inline-flex;align-items:center;gap:.4rem";
@@ -1607,10 +1684,18 @@ def _(anywidget, asyncio, traitlets):
           hint.hidden = !!cfg.minimal;
           const step = (arr, cur, d) => { const i = arr.indexOf(cur); return arr[Math.max(0, Math.min(arr.length - 1, (i < 0 ? 0 : i) + d))]; };
           root.tabIndex = 0;
+          // a click anywhere in the widget (a map, a pick, a button) leaves the
+          // keyboard with the root: the maps' own keyboard is off, and a click on
+          // a canvas otherwise parks focus on the canvas or the page body, where
+          // the keys above never arrive (Stephen, 2026-09-03). Inputs keep theirs.
+          root.addEventListener("pointerup", (e) => {
+            if (e.target && /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) return;
+            setTimeout(() => { try { root.focus({preventScroll: true}); } catch (err) {} }, 0);
+          });
           root.addEventListener("keydown", (e) => {
             if (e.target && /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) return;
             const k = e.key;
-            if (k === "[" || k === "]") { s2y = step(cfg.s2_years || [], s2y, k === "]" ? 1 : -1); styleS2(); send("s2"); }
+            if (k === "[" || k === "]" || k === "ArrowLeft" || k === "ArrowRight") { s2y = step(cfg.s2_years || [], s2y, (k === "]" || k === "ArrowRight") ? 1 : -1); styleS2(); yrRelease(); }
             else if (k === ";" || k === "'") { s2scale = Math.round(10 * Math.max(SC_MIN, Math.min(SC_MAX, s2scale + (k === "'" ? 0.1 : -0.1)))) / 10; styleSc(); scRelease(); }
             else if (k >= "1" && k <= "9") { const f = fills[Number(k) - 1]; if (f) { fill = f.value; styleFill(); send("fill"); } }
             else if (k === "-" || k === "=") { const v = step(aefYears, y0, k === "=" ? 1 : -1); if (v < y1) { y0 = v; styleAef(); aefRelease(); } }
@@ -1847,6 +1932,12 @@ def _(anywidget, asyncio, traitlets):
               attributionControl: {compact: false},
             });
             mapL = mk(L.mapEl); mapR = mk(R.mapEl);
+            // maplibre's keyboard handler is OFF on both maps: a clicked map
+            // (the pick, which the hexagon highlight needs) holds focus, and its
+            // arrows panned and its - = zoomed, under the widget's own keys
+            // (Stephen, 2026-09-03: "I can't then left right arrow move the S2").
+            // The arrows now step the S2 year; the mouse pans and zooms.
+            mapL.keyboard.disable(); mapR.keyboard.disable();
             // maplibre's own controls: full screen takes the WHOLE widget (both
             // panes and the strip), not the one map it sits on
             mapR.addControl(new maplibregl.FullscreenControl({container: root}), "top-right");
@@ -1904,7 +1995,9 @@ def _(anywidget, asyncio, traitlets):
           model.on("change:config", () => {
             const was = cfg;
             try { cfg = JSON.parse(model.get("config") || "{}"); } catch (e) { cfg = {}; }
-            if (cfg.s2_year !== s2y) { s2y = cfg.s2_year; styleS2(); }
+            // the S2 year: the handle is the UI's, the echo only draws the layer
+            // (a late echo of an older year snapped the handle back after two
+            // quick steps; the kernel never changes the year on its own)
             if (Number(cfg.s2_scale) && Number(cfg.s2_scale) !== s2scale) { s2scale = Number(cfg.s2_scale); scSent = s2scale; styleSc(); }
             if (cfg.fill && cfg.fill !== fill) { fill = cfg.fill; styleFill(); }
             if (cfg.labels !== was.labels) { labelsOn = cfg.labels !== false; labels(labelsOn); }
@@ -2116,6 +2209,7 @@ def _(
             f"{stats} · {fr['score']}"
             + f" · send {time.time() - t2:.2f} s · {time.time() - t0:.1f} s"
             f" · S2 tiles {st['served']:,} served, {st['blank']:,} empty"
+            + "".join(f" · S2 {y}: {100 * v:.0f}% of pixels backfilled from the temporal median" for y, v in sorted(st["fill"].items()))
         )
         _say(HOLD["last_status"])
 
