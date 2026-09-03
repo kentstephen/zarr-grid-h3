@@ -5,11 +5,13 @@
 #     "xarray",
 #     "zarr>=3",
 #     "icechunk",
+#     "duckdb>=1.5.5",
 #     "h3ronpy>=0.22.0",
 #     "pyarrow>=25.0.0",
 #     "obstore>=0.9.2",
 #     "anywidget>=0.9",
 #     "numpy==2.5.1",
+#     "python-dotenv",
 # ]
 # ///
 """The storm fence, hexified: MRMS radar rain as H3 res 7 cell means, HRRR's claim
@@ -63,8 +65,8 @@ def _():
     import pyarrow as pa
     import traitlets
     import zarr
-    from h3ronpy import change_resolution
-    from h3ronpy.vector import cells_to_wkb_polygons, coordinates_to_cells
+    import duckdb
+    from h3ronpy.vector import coordinates_to_cells
     from obstore.store import HTTPStore
     from zarr.storage import ObjectStore
 
@@ -72,14 +74,16 @@ def _():
     sys.path.insert(0, str(ROOT / "join"))
     import hrrr_mirror
 
+    dcon = duckdb.connect()
+    dcon.sql("INSTALL h3 FROM community; LOAD h3;")
+
     return (
         HTTPStore,
         ObjectStore,
         ROOT,
         anywidget,
-        cells_to_wkb_polygons,
-        change_resolution,
         coordinates_to_cells,
+        dcon,
         hrrr_mirror,
         json,
         mo,
@@ -123,7 +127,7 @@ def _(ROOT):
     HRRR_VAR = "precipitation_surface"
     # Opening window: an int is the last DAYS UTC days through the newest common hour
     # (LIVE); a ("YYYY-MM-DD", "YYYY-MM-DD") tuple is a fixed window.
-    DAYS = ("2024-09-19", "2024-10-16")  # the bad stretch: Helene forms -> Milton exits
+    DAYS = ("2024-09-24", "2024-09-28")  # Helene: forms in the Caribbean -> inland decay
     # No HOURLY_MAX_DAYS here: the cap is computed downstream from the box's cell
     # counts against V8's string cap (the raster notebook's 6-day wall, docs/11).
     # `frames` ships as FOUR part-traits (4x headroom, ~90 days at this box); READ
@@ -148,7 +152,29 @@ def _(ROOT):
     RAMP_HI_MM = None  # mm/h at the last stop, or None for the window's p99 of wet pixels
     FPS = 8
     MAP_HEIGHT = 640
-    BASE_STYLE = "https://tiles.openfreemap.org/styles/dark"  # OpenFreeMap Dark: keyless, no registration, no limits
+    # CARTO Dark Matter raster tiles. The key lives in .env as CARTO_KEY (never
+    # committed); the style is a MapLibre style object with one raster source, so
+    # the browser needs no vector styling and there is no symbol layer to sit under.
+    import os as _os
+    from dotenv import load_dotenv as _load_dotenv
+
+    _load_dotenv(ROOT / ".env")
+    CARTO_KEY = _os.environ.get("CARTO_KEY", "")
+    BASE_STYLE = {
+        "version": 8,
+        "sources": {
+            "carto": {
+                "type": "raster",
+                "tiles": [
+                    "https://basemaps.cartocdn.com/rastertiles/dark_all/{z}/{x}/{y}.png"
+                    + (f"?key={CARTO_KEY}" if CARTO_KEY else "")
+                ],
+                "tileSize": 256,
+                "attribution": "&copy; <a href=\"https://www.openstreetmap.org/copyright\">OpenStreetMap</a> contributors &copy; <a href=\"https://carto.com/attributions\">CARTO</a>",
+            }
+        },
+        "layers": [{"id": "carto", "type": "raster", "source": "carto"}],
+    }
     import tempfile as _tempfile
 
     CACHE_DIR = str(_tempfile.gettempdir()) + "/x-sql-marimo"
@@ -428,9 +454,11 @@ def _(anywidget, traitlets):
             const rd = new Blob([u8]).stream().pipeThrough(new DecompressionStream("gzip")).getReader();
             for (;;) { const {done, value} = await rd.read(); if (done) return off; out.set(value, off); off += value.length; }
           }
-          let loadSeq = 0;
+          let loadSeq = 0, styleKey = "";
           async function loadFrames() {
             try { cfg = JSON.parse(model.get("config") || "{}"); } catch (e) { cfg = {}; }
+            // The style ships in config, which lands after boot(): apply it once here.
+            if (map && cfg.style && styleKey !== JSON.stringify(cfg.style)) { styleKey = JSON.stringify(cfg.style); map.setStyle(cfg.style); }
             if (!document.fullscreenElement) mapEl.style.height = (cfg.height || 640) + "px";
             lut = buildLut(cfg.field_stops || ["#0b1d33", "#ffffff"]);
             ttl.textContent = cfg.title || ""; sub.textContent = cfg.subtitle || "";
@@ -891,10 +919,11 @@ def _(anywidget, traitlets):
             }
             const mlEl = document.createElement("div"); mlEl.className = "sf-ml"; mapEl.prepend(mlEl);
             map = new maplibregl.Map({
-              container: mlEl, style: cfg.style || "https://tiles.openfreemap.org/styles/dark",
+              container: mlEl, style: cfg.style || {version: 8, sources: {}, layers: []},  // config may not have landed yet; loadFrames applies it
               center: [HOME.longitude, HOME.latitude], zoom: HOME.zoom, minZoom: HOME.minZoom, maxZoom: HOME.maxZoom,
               attributionControl: {compact: true}, dragRotate: false, pitchWithRotate: false,
             });
+            if (cfg.style) styleKey = JSON.stringify(cfg.style);
             map.touchZoomRotate.disableRotation();
             map.on("error", e => { if (e && e.error) console.error(e.error); });
             map.on("style.load", () => {
@@ -993,7 +1022,7 @@ def _(HRRR_VAR, HTTPStore, MRMS_CHUNK_H, MRMS_MIRROR_DIR, MRMS_URL, MRMS_VAR, Ob
 
 
 @app.cell
-def _(BOX, PROTO_CACHE, RES_C, RES_F, RES_L, cells_to_wkb_polygons, change_resolution, coordinates_to_cells, hlat, hlon, mg, mlat, mlon, mo, mtimes, np, pa):
+def _(BOX, PROTO_CACHE, RES_C, RES_F, RES_L, coordinates_to_cells, dcon, hlat, hlon, mg, mlat, mlon, mo, mtimes, np, pa):
     # THE GEOMETRY, ONCE. The MRMS box rectangle, the radar-coverage mask (a mature
     # hour's finite pixels), res 9 labels -> res 7 FILL cells (rings to the browser)
     # and the px -> cell map; the HRRR box rectangle, its
@@ -1001,6 +1030,18 @@ def _(BOX, PROTO_CACHE, RES_C, RES_F, RES_L, cells_to_wkb_polygons, change_resol
     # STATIC EDGE TABLE (each hex edge once, the cell row on each side, from the ring
     # WKB by midpoint pairing); the HRRR store blocks the read fetches.
     import time as _gtime
+
+    # THE RULE (x-sql-marimo docs): h3ronpy ONLY for latlng -> cell (fastest there);
+    # DuckDB h3 for every other H3 op (parents, rings, polyfill, disks). DuckDB ring
+    # WKB differs from h3ronpy in low-order float bits; pairing rounds at 1e-6 deg
+    # and every ring below comes from DuckDB, so shared edges still pair exactly.
+    def _h3_parent(_cells, _res):
+        _t = pa.table({"c": pa.array(np.asarray(_cells, np.uint64), pa.uint64())})
+        return dcon.execute(f"SELECT h3_cell_to_parent(c, {int(_res)}) AS p FROM _t").fetchnumpy()["p"].astype(np.uint64)
+
+    def _h3_rings_raw(_cells):
+        _t = pa.table({"c": pa.array(np.asarray(_cells, np.uint64), pa.uint64())})
+        return b"".join(_r[0] for _r in dcon.execute("SELECT h3_cell_to_boundary_wkb(c) AS w FROM _t").fetchall())
 
     mo.stop(BOX is None, mo.md("**BOX is required**: full-CONUS MRMS is 24.5M px per frame."))
     mo.stop(not (PROTO_CACHE / "label7.npy").exists(), mo.md("**proto/cache/label7.npy missing**: run hrrr-heat-domes.py once to build the HRRR label cache."))
@@ -1027,7 +1068,7 @@ def _(BOX, PROTO_CACHE, RES_C, RES_F, RES_L, cells_to_wkb_polygons, change_resol
     _plon = np.tile(mlon[c0:c1], ny)[lidx]
     _lab9 = np.asarray(coordinates_to_cells(_plat, _plon, int(RES_L))).astype(np.uint64)
     _uniq9 = int(np.unique(_lab9).size)
-    _par7 = np.asarray(change_resolution(pa.array(_lab9), int(RES_C))).astype(np.uint64)
+    _par7 = _h3_parent(_lab9, RES_C)
 
     # ---- the FILL cells: res 7, from the covered pixels; every cell has px, no holes
     cells7 = np.unique(_par7)
@@ -1043,21 +1084,20 @@ def _(BOX, PROTO_CACHE, RES_C, RES_F, RES_L, cells_to_wkb_polygons, change_resol
     hny, hnx = hr1 - hr0, hc1 - hc0
     Nh = hny * hnx
     _lab7 = np.load(PROTO_CACHE / "label7.npy").reshape(hlat.shape)[hr0:hr1, hc0:hc1].ravel()
-    _par6h = np.asarray(change_resolution(pa.array(_lab7.astype(np.uint64)), int(RES_F))).astype(np.uint64)
+    _par6h = _h3_parent(_lab7, RES_F)
 
     # ---- the fence cells and the label maps -----------------------------------------
     fcells = np.unique(_par6h)
     K = int(fcells.size)
     hpidx = np.searchsorted(fcells, _par6h).astype(np.uint32)
-    _par6c = np.asarray(change_resolution(pa.array(cells7), int(RES_F))).astype(np.uint64)
+    _par6c = _h3_parent(cells7, RES_F)
     _cp = np.searchsorted(fcells, _par6c)
     _cp[_cp >= K] = 0
     c7p = np.where(fcells[_cp] == _par6c, _cp, np.uint32(0xFFFFFFFF)).astype(np.uint32)
 
     # ---- the edge table: every hex edge once, by ring-midpoint pairing --------------
     # WKB rings in float64 (h3's own vertices; shared edges pair exactly at 1e-6 deg).
-    _wkb = cells_to_wkb_polygons(pa.array(fcells))
-    _raw = b"".join(_wkb.to_pylist())
+    _raw = _h3_rings_raw(fcells)
     _buf = np.frombuffer(_raw, dtype=np.uint8)
     _e_cell, _e_p0, _e_p1 = [], [], []
     _off = 0
@@ -1094,8 +1134,7 @@ def _(BOX, PROTO_CACHE, RES_C, RES_F, RES_L, cells_to_wkb_polygons, change_resol
     # ---- the FILL rings: every res 7 cell's closed ring, web mercator float32 ------
     # (the hex-waves carrier: verts + ring starts + per-vertex colour; the fast path
     # assumes uniform hexagons, the loop is the pentagon-safe fallback)
-    _wkb7 = cells_to_wkb_polygons(pa.array(cells7))
-    _raw7 = b"".join(_wkb7.to_pylist())
+    _raw7 = _h3_rings_raw(cells7)
     _rec = len(_raw7) // K7
     if len(_raw7) == _rec * K7 and (_rec - 13) % 16 == 0 and int.from_bytes(_raw7[9:13], "little") == (_rec - 13) // 16:
         _np7 = (_rec - 13) // 16

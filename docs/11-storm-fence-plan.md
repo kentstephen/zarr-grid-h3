@@ -371,3 +371,72 @@ less, and the pass only runs while the fill is on). Match numbers unchanged
 Round 6 amendment: the fill is ORANGE now (235,140,60; the protan-safe
 complement of the blues ramp, per Stephen), alpha cap 180/255. The storm's
 luminance detail stays readable through a full match.
+
+### Round 7: the H3 tooling rule enforced (2026-08-31)
+
+Hard rule, stated by Stephen and now in memory: h3ronpy ONLY for
+latlng -> cell (it is fastest there); DuckDB h3 for every other H3 op.
+storm-fence-hex.py accordingly: `change_resolution` (3 sites) is now
+`h3_cell_to_parent` and `cells_to_wkb_polygons` (2 sites) is now
+`h3_cell_to_boundary_wkb`, both via a shared DuckDB con built in the imports
+cell (`INSTALL h3 FROM community`); `coordinates_to_cells` stays.
+`duckdb>=1.5.5` added to the script header. Parents verified identical;
+ring WKB is NOT byte-identical across the libs (low-order float bits in the
+vertices), which the 1e-6 midpoint rounding absorbs since every ring now
+comes from DuckDB. Polyfill was considered for the cell sets and does not
+fit: the fill and fence sets are pixel-coverage-defined (radar mask holes,
+the HRRR cone ending at 21.1N inside the box), not geometry-defined; a BOX
+polyfill would mint cells with no data behind them. Unflown this round;
+the geometry cell is the only code touched.
+
+### Round 7 amendment: the memory census (2026-08-31)
+
+Stephen: "the memory saving techniques added last time did not work, still
+3.2 GB." Measured with an instrumented flight (season window, wide box),
+RSS polled on both processes plus an in-page byte census:
+
+- Browser JS heap 3,586 MB. Breakdown: frames 1,059 MB + planes 532 MB
+  (the DESIGNED decoded budget, working as intended) + color/fillc double
+  buffers and the verts copy 264 MB + model-retained traits 230 MB
+  (compressed frame parts 68 MB, compressed planes 43 MB, geometry; no
+  transport-buffer pinning, every DataView owns exactly its bytes) +
+  ~1.4 GB unaccounted by our arrays: deck.gl's per-layer tessellation.
+  TWO SolidPolygonLayers (field + round 6 fill) each retain CPU attribute
+  copies of the 11M-vert mesh (positions, indices, colors, picking).
+- So the gzip round DID what it claimed (model holds ~230 MB, not GBs;
+  decode runs once) but it could never shrink the tab below decoded
+  frames + planes + two tessellations. The 3.2 GB reading is that.
+- Kernel tree: 6,248 MB steady, 19,038 MB PEAK. The READ cell's transients:
+  `_mmv` full (F, Nh) float64 (~5.6 GB), `_hraw` full float32 (~2.8 GB),
+  `hq` + `_hm8` full uint8 copies, 24-h MRMS slabs, threaded zarr chunk
+  decompression. Steady = HOLD (1.6 GB) + caches + fragmentation the OS
+  keeps mapped after the peak.
+
+Candidate fixes, not yet applied: merge the fill INTO the field layer's
+per-vertex colors (one tessellation, kills ~700 MB and the doubled frame
+step); single color buffers; kernel: quantise HRRR per block into `hq`
+directly (no `_hraw`), compute the mean plane per frame from `hq` (no full
+`_mmv`), per-frame `_hm8` view. Default window now Helene (09-24..09-28,
+120 frames, ~285 MB decoded).
+
+### Round 8: CARTO Dark Matter raster basemap (2026-08-31)
+
+Basemap swapped from OpenFreeMap Dark (round 3) to CARTO Dark Matter raster
+tiles, `https://basemaps.cartocdn.com/rastertiles/dark_all/{z}/{x}/{y}.png?key=...`.
+The key is `CARTO_KEY` in `.env` (gitignored), loaded in the config cell with
+python-dotenv (added to pyproject and the script header). `BASE_STYLE` is now
+a MapLibre style OBJECT with one raster source rather than a style URL, so
+there is no vector styling in the browser and no symbol layer: `labelBase`
+resolves null and the deck layers draw on top of the raster, labels included.
+The key rides in the widget config, so it lands in any exported HTML;
+restrict referrers in the CARTO dashboard before sharing exports.
+
+Bug found while flying it: the map is constructed at `boot()`, before the
+config trait lands (the widget is displayed in an earlier cell than the one
+that assigns `film.config`), so `cfg.style` is undefined at boot. The old
+hardcoded OpenFreeMap fallback had been hiding this. Fix: boot with an empty
+style, and `loadFrames()` (already fired on `change:config`) calls
+`map.setStyle(cfg.style)` once when the style arrives, keyed on its JSON so
+frame updates never reload tiles; the existing `style.load` handler
+re-places the deck layers. Verified standalone in headless Chromium: raster
+style plus interleaved MapboxOverlay renders, every tile 200.
