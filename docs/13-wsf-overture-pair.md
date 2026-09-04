@@ -273,3 +273,32 @@ three-band constant is kept as a comment in DIVISION_BANDS.
   built-up extent; it is labelled as the earliest date, not a share.
 - Countries without counties (48 of 219 in Overture) fall through to no
   county; the regions partition could stand in.
+
+- Region analytics, talked through and left alone (2026-09-04). Stephen:
+  "add duckdb analytics by overture region so the map can help the user
+  find areas with the most construction ... not to necessarily show the
+  divisions but to help discover"; possibly the pair as an agent's tool.
+  Where it landed: "we're probably fine the way we are, but still wish we
+  had the things that we were exploring." Nothing built. What was found:
+  - The fold is view-only, so "where is the most construction" needs
+    either a precomputed WSF -> H3 table (global level 0 on a stride is a
+    batch job, ~6 Tpx native) or a read of the pyramid. cboettig's h8
+    partition grouped to a parent is the division key, nothing drawn.
+  - A coarse fold can read level k of the same zarr instead of level 0 on
+    a stride: one level up per zoom out holds every fold near the zoom 10
+    cost (zoom 7 padded: ~5 Gpx native, ~77 Mpx at level 3). But the
+    pyramid is a MIN, so the counts become greenfield only: a block reads
+    "new in the window" only if nothing was built under it before. Infill
+    and edge growth vanish; built share is overstated. The frame would run
+    unchanged, the legend words would not.
+  - The zoomed-out settlements Stephen likes are the zarr pyramid drawn as
+    the picture; nothing should paint over it. So the only map-side form
+    was a hover with a county name and a coarse number, and that reads as
+    one layer too many ("I already feel like we're kinda maxed out there").
+    A region table under the map, beside the tables button, was the
+    non-map form.
+  - Agent: viable inside the notebook as mo.ui.chat with a model function
+    that runs the DuckDB queries and writes a camera target into state (the
+    widget already has a flyTo path); viable outside by lifting the frame
+    and the queries into a module with the notebook as the viewer. Not
+    viable: driving a running marimo session from outside.
