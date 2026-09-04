@@ -25,10 +25,9 @@
 A fork of the settlement pair (s2-wsf-aef-overture-pair.py) with the label
 side swapped for one source and the whole thing made simpler. Two maps in one
 widget, one camera. LEFT: a picture, never covered. Earth Genome's Sentinel-2
-yearly mosaic (2022-2025) as live tiles the kernel renders from the COGs; and,
-on request, a Landsat still (OpenGeoHub's GLAD ARD bi-monthly mosaics on the
-Copernicus Data Space, 1997-2024) fetched once for the box in view and pinned
-there. RIGHT: one opaque H3 fill per hexagon at res 9 and coarser, from
+yearly mosaic (2022-2025) and OpenGeoHub's Landsat bi-monthly mosaics
+(GLAD ARD v2 on the Copernicus Data Space, 1997-2021), both as live tiles the
+kernel renders from the COGs, one slider across both sensors. RIGHT: one opaque H3 fill per hexagon at res 9 and coarser, from
 
   CTrees global aboveground biomass (AWS Open Data, Icechunk): 100 m, annual
   2000-2025, Mg/ha, with a residual standard error per pixel per year. All
@@ -48,7 +47,7 @@ Run: uv run marimo edit s2-ctrees-pair.py
 
 Landsat needs a Copernicus Data Space S3 key pair in the environment
 (CDSE_S3_ACCESS_KEY, CDSE_S3_SECRET_KEY; a .env in the repo is read). Without
-it the left pane is Sentinel-2 only and the Landsat buttons say so.
+it a Landsat year draws nothing and the legend says so.
 
 Attribution: CTrees global AGB (CC-BY 4.0, doi 10.82924/7vmb-zv66; Yang,
 Saatchi et al. 2026). Sentinel-2 yearly mosaics and Sentinel-2 L2A temporal
@@ -96,7 +95,6 @@ def _():
     from PIL import Image
 
     load_dotenv()
-
     return (
         GeoTIFF,
         Image,
@@ -137,11 +135,10 @@ def _(mo):
     - **PICTURE** (left header, a slider, the arrow keys or `[` `]`): 1997
       to 2025. 2022 to 2025 are the Sentinel-2 yearly mosaics, live tiles
       (the temporal median fills the yearly's cloud holes). 1997 to 2021 are
-      Landsat years: nothing is fetched until you ask. **LANDSAT** `this
-      year` (key `k`) fetches the picture year for the box in view and pins
-      it there as a still; `all years` (key `j`) fetches the rest for that
-      box in the background. Sentinel-2 2022 keeps drawing around the still.
-      The `scale` slider is a gain on the Sentinel-2 tiles. **FIND**: a
+      the Landsat bi-monthly mosaics (July-August), live tiles too, read
+      from Copernicus with your key and kept on disk; the year below the one
+      you look at is fetched ahead. The `scale` slider is a gain on both
+      sensors' true colour. **FIND**: a
       Photon geocoder; Enter or a click flies both maps there.
     - **FILL** (keys `1` to `3`): **change**, the biomass at the window's
       to-end minus the from-end, blue where it rose and orange where it fell,
@@ -165,9 +162,9 @@ def _(mo):
 @app.cell
 def _(os, tempfile):
     # ---- constants ----------------------------------------------------------
-    # The picture years: Landsat 1997..2021 (a still on request) then the
-    # Sentinel-2 mosaics 2022..2025 (live tiles). One slider, one picture at
-    # a time (Stephen, 2026-09-04: "we would just show one at a time").
+    # The picture years: Landsat 1997..2021 then the Sentinel-2 mosaics
+    # 2022..2025, both live tiles. One slider, one picture at a time
+    # (Stephen, 2026-09-04: "we would just show one at a time").
     S2_YEARS = (2022, 2023, 2024, 2025)
     LS_YEARS = tuple(range(1997, 2022))
     PIC_YEARS = LS_YEARS + S2_YEARS
@@ -193,7 +190,7 @@ def _(os, tempfile):
     # the tci noise"): B04 and B08 of the yearly mosaic (uint16, the same
     # pyramid as the TCI, on source.coop; the temporal mosaic's bands sit on
     # a bucket that refuses anonymous reads, so NDVI has no backfill), and
-    # B03 / B04 of the Landsat still. One fixed scale for every year and both
+    # B03 / B04 of the Landsat tiles. One fixed scale for every year and both
     # sensors, on Carto's Emrld. The yearly mosaic's reflectance carries the
     # Sentinel-2 offset of 1000 (its red never reads below ~1177); the temporal
     # median does not (red from ~200): the offset is removed per item.
@@ -224,17 +221,25 @@ def _(os, tempfile):
     LOSS_ABS = 10.0
 
     # ---- Landsat: OpenGeoHub bi-monthly mosaics on the Copernicus Data Space --
-    # STAC search is open; the COGs are s3://eodata behind a CDSE key pair.
-    LS_STAC = "https://stac.dataspace.copernicus.eu/v1/search"
-    LS_COLLECTION = "opengeohub-landsat-bimonthly-mosaic-v1.0.1"
+    # The COGs are s3://eodata behind a CDSE key pair, at a path that follows
+    # from the year, the period and the 1-degree cell name (no STAC call:
+    # the search endpoint rate-limits at a handful of calls a second, and
+    # the STAC items only repeat what the path already says).
     LS_ENDPOINT = "https://eodata.dataspace.copernicus.eu"
     LS_BUCKET = "eodata"
-    # the period(s) that stand for a year: one, or several and the median
-    LS_PERIODS = ("07-08",)
+    LS_PATH = "Global-Mosaics/Landsat/OLM_SWA_ARD2/v1/{year}/{mm}/01/Landsat_mosaic_{year}_{period}_{cell}_V1.0.1/{band}_{year}.tif"
+    # the bi-monthly period that stands for a year
+    LS_PERIOD = "07-08"
     LS_BANDS = ("B03", "B02", "B01", "B04")  # red, green, blue, NIR
-    LS_PX = 0.00025
-    LS_MAX_PX = 2_000_000
+    # the tile zooms: 30 m is about z12 at the equator; deck scales the z12
+    # tile past it. Below z7 a tile spans more than a cell's coarsest overview
+    LS_TILE_MIN_Z, LS_MAX_Z = 7, 12
+    # the largest window one band read may ask for (pixels)
+    LS_WIN_MAX = 4_000_000
     LS_CONNECTIONS = 4  # the quota for a general user
+    # after a live tile, the same tile for this many years below is fetched
+    # in the background once the live requests go quiet
+    LS_PREFETCH = 1
     LS_KEY = os.environ.get("CDSE_S3_ACCESS_KEY", "")
     LS_SECRET = os.environ.get("CDSE_S3_SECRET_KEY", "")
 
@@ -295,17 +300,18 @@ def _(os, tempfile):
         LABELS_SLOT,
         LOSS_ABS,
         LOSS_FRAC,
+        LS_BANDS,
         LS_BUCKET,
-        LS_COLLECTION,
         LS_CONNECTIONS,
         LS_ENDPOINT,
         LS_KEY,
-        LS_MAX_PX,
-        LS_PERIODS,
-        LS_PX,
-        LS_BANDS,
+        LS_MAX_Z,
+        LS_PATH,
+        LS_PERIOD,
+        LS_PREFETCH,
         LS_SECRET,
-        LS_STAC,
+        LS_TILE_MIN_Z,
+        LS_WIN_MAX,
         LS_YEARS,
         MAX_RES,
         MIN_RES,
@@ -396,7 +402,7 @@ def _(
     def merc_lat(y):
         return _y_to_lat(y)
 
-    return CELL_KM2, contains, merc_lat, merc_y, pad_box, res_for_view, view_to_bbox
+    return CELL_KM2, contains, pad_box, res_for_view, view_to_bbox
 
 
 @app.cell
@@ -850,89 +856,143 @@ def _(
     CACHE_DIR,
     GeoTIFF,
     Image,
+    LS_BANDS,
     LS_BUCKET,
-    LS_COLLECTION,
     LS_CONNECTIONS,
     LS_ENDPOINT,
     LS_KEY,
-    LS_MAX_PX,
-    LS_PERIODS,
-    LS_BANDS,
-    LS_PX,
+    LS_MAX_Z,
+    LS_PATH,
+    LS_PERIOD,
+    LS_PREFETCH,
     LS_SECRET,
-    LS_STAC,
+    LS_TILE_MIN_Z,
+    LS_WIN_MAX,
+    LS_YEARS,
+    RASTER_TILE,
     S3Store,
     Window,
     asyncio,
     io,
     json,
     math,
-    merc_lat,
-    merc_y,
     ndvi_rgb,
     np,
     os,
     time,
-    urllib,
 ):
-    # ---- Landsat: a STILL for a box and a year, on request --------------------
-    # The bi-monthly mosaics are 1 by 1 degree cells (EPSG:4326, 0.00025 deg,
-    # uint8 per band, seven bands) on s3://eodata behind a CDSE key. The STAC
-    # search is open and finds the cells under the box for a period; the RGB
-    # bands are read as windows through obstore + async-geotiff, nearest-
-    # sampled onto ONE output grid for the box (columns even in lon, rows
-    # even in Mercator y, so deck's BitmapLayer draws it exactly), stretched
-    # p2-p98 per band, one PNG. Four reads at once: the quota. The still is
-    # cached on disk by (year, periods, box); a second session reads nothing.
-    # NOT RUN YET (no key here, 2026-09-04): written against the STAC's stated
-    # layout.
-    os.makedirs(os.path.join(CACHE_DIR, "landsat"), exist_ok=True)
+    # ---- Landsat tiles, by YEAR and MODE: the left pane's other sensor --------
+    # The same shape as the Sentinel-2 tile cell: the browser's TileLayer asks
+    # for (z, x, y, year, mode) and gets one PNG. No STAC: the bi-monthly
+    # mosaics are 1 by 1 degree cells (EPSG:4326, 0.00025 deg, uint8 per
+    # band, COGs with overviews) at a path that follows from the year, the
+    # period and the cell name (LS_PATH), so a tile knows its files from its
+    # own bounds. A missing file (ocean, no data) is remembered as None. Every
+    # read waits on LS_CONNECTIONS (the CDSE quota). Tiles are cached in
+    # memory and on disk by (year, mode, z, x, y): a second session reads
+    # nothing from Copernicus. ONE stretch for every tile of every year: the
+    # p2-p98 of the coarsest overview of the first file opened, written next
+    # to the cache; delete `stretch.json` there to lock a new one. Once the
+    # live requests go quiet a worker fetches the same tiles for the year
+    # below (LS_PREFETCH years), because the slider walks down from 2022.
+    # (Was a still per box, fetched on a key; Stephen, 2026-09-04: "only one
+    # tile is updating, the rest of the tiles are staying the same".)
+    _dir = os.path.join(CACHE_DIR, "landsat")
+    os.makedirs(_dir, exist_ok=True)
     _store = (
         S3Store(LS_BUCKET, endpoint=LS_ENDPOINT, access_key_id=LS_KEY, secret_access_key=LS_SECRET,
                 region="default", virtual_hosted_style_request=False)
         if LS_KEY and LS_SECRET else None
     )
+    _R = 6378137.0
     _open = {}
     _sem = asyncio.Semaphore(LS_CONNECTIONS)
-    _bytes = {"n": 0}
-    # ONE stretch per box: the p2-p98 of the first year fetched for it, reused
-    # for every other year of that box, so a year with more bare ground stays
-    # brighter than its neighbours instead of being normalised back to them
-    _stretch = {}
+    _png = {}
+    _gain = {"v": 1.0}
+    _stat = {"served": 0, "blank": 0, "ms": 0.0, "bytes": 0, "live": 0, "prefetched": 0}
+    _stretch = {"v": None}
+    _stretch_fp = os.path.join(_dir, "stretch.json")
+    if os.path.exists(_stretch_fp):
+        try:
+            with open(_stretch_fp) as _f:
+                _stretch["v"] = [tuple(v) for v in json.load(_f)]
+        except Exception:
+            pass
+    _queue = []
+    _queued = set()
+    _worker = {"task": None}
 
     def ls_ready():
         return _store is not None
 
-    def ls_cached(box, year):
-        """True when both modes of the still are already on disk for this box."""
-        rbox = tuple(round(v, 3) for v in box)
-        tag = f"{year}_{'-'.join(LS_PERIODS)}_{'_'.join(f'{v:.3f}' for v in rbox)}"
-        return all(os.path.exists(os.path.join(CACHE_DIR, "landsat", f"{tag}_{m}.png")) for m in ("tc", "ndvi"))
-
     def ls_bytes():
-        return _bytes["n"]
+        return _stat["bytes"]
 
-    def _stac(box, year, period):
-        mm = period.split("-")[0]
-        body = json.dumps({
-            "collections": [LS_COLLECTION], "bbox": list(box), "limit": 50,
-            "datetime": f"{year}-{mm}-01T00:00:00Z/{year}-{mm}-01T23:59:59Z",
-        }).encode()
-        req = urllib.request.Request(LS_STAC, data=body, headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=60) as r:
-            return json.load(r)["features"]
+    def ls_raster_stats():
+        return dict(_stat, cached=len(_png), stretch=_stretch["v"])
 
-    async def _get(href):
-        rel = href.split(f"s3://{LS_BUCKET}/")[1]
+    def ls_set_scale(v):
+        """The picture scale slider: one gain for both sensors' true colour."""
+        v = float(min(4.0, max(0.1, v)))
+        if v == _gain["v"]:
+            return False
+        _gain["v"] = v
+        return True
+
+    def _cell_name(lat0, lon0):
+        """The mosaic cell whose south-west corner is (lat0, lon0), named by
+        the corner nearest the equator and the prime meridian: [-63, -12,
+        -62, -11] is 11S062W, [-101, 40, -100, 41] is 40N100W, [120, -31,
+        121, -30] is 30S120E (probed 2026-09-04)."""
+        la = lat0 if lat0 >= 0 else -(lat0 + 1)
+        lo = lon0 if lon0 >= 0 else -(lon0 + 1)
+        return f"{la:02d}{'N' if lat0 >= 0 else 'S'}{lo:03d}{'E' if lon0 >= 0 else 'W'}"
+
+    def _path(year, cell, band):
+        return LS_PATH.format(year=year, mm=LS_PERIOD.split("-")[0], period=LS_PERIOD, cell=cell, band=band)
+
+    def _tile_ll(z, x, y):
+        n = 2 ** z
+        lat = lambda yy: math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * yy / n))))
+        return x / n * 360 - 180, lat(y + 1), (x + 1) / n * 360 - 180, lat(y)
+
+    def _fp(year, mode, z, x, y):
+        return os.path.join(_dir, str(year), mode, f"{z}_{x}_{y}.png")
+
+    async def _get(rel):
         if rel not in _open:
             async with _sem:
-                _open[rel] = await GeoTIFF.open(rel, store=_store)
+                try:
+                    _open[rel] = await GeoTIFF.open(rel, store=_store)
+                except Exception:
+                    _open[rel] = None
         return _open[rel]
 
-    async def _band_into(href, out, lon_c, lat_c, level_px):
-        """One band file, nearest-sampled into `out` (h, w) where the file
-        covers the output pixel and the value is nonzero."""
-        g = await _get(href)
+    async def _lock_stretch(g):
+        """p2-p98 per band from the coarsest overview of the first file: one
+        stretch for the session (and the disk cache), so no seams."""
+        if _stretch["v"] is not None:
+            return
+        lv = [g, *g.overviews][-1]
+        async with _sem:
+            ra = await lv.read()
+        a = np.asarray(np.ma.filled(ra.as_masked(), 0)).reshape(-1)
+        a = a[(a > 0) & (a < 255)]
+        if a.size < 100:
+            return
+        lo, hi = (float(q) for q in np.percentile(a, [2, 98]))
+        _stretch["v"] = [(lo, hi if hi > lo else lo + 1.0)] * 3
+        with open(_stretch_fp, "w") as f:
+            json.dump(_stretch["v"], f)
+
+    async def _band_into(rel, out, lon_c, lat_c, level_px):
+        """One band file, nearest-sampled into `out` (T, T) where the file
+        covers the tile pixel and the value is nonzero; the bytes read."""
+        g = await _get(rel)
+        if g is None:
+            return 0
+        if _stretch["v"] is None:
+            await _lock_stretch(g)
         L, _B, R_, Tt = g.bounds
         levels = [g, *g.overviews]
         li = 0
@@ -944,7 +1004,7 @@ def _(
         px = (R_ - L) / W
         c0, c1 = max(0, int(math.floor((lon_c[0] - L) / px))), min(W, int(math.ceil((lon_c[-1] - L) / px)) + 1)
         r0, r1 = max(0, int(math.floor((Tt - lat_c[0]) / px))), min(H, int(math.ceil((Tt - lat_c[-1]) / px)) + 1)
-        if c1 <= c0 or r1 <= r0:
+        if c1 <= c0 or r1 <= r0 or (c1 - c0) * (r1 - r0) > LS_WIN_MAX:
             return 0
         async with _sem:
             ra = await lv.read(window=Window(col_off=c0, row_off=r0, width=c1 - c0, height=r1 - r0))
@@ -957,99 +1017,141 @@ def _(
         out[valid] = v[valid]
         return int(a.size) * a.dtype.itemsize
 
-    async def ls_still(box, year):
-        """({"tc": PNG, "ndvi": PNG}, bounds (W, S, E, N), bytes read) for the
-        year's Landsat picture over the box, or (None, bounds, 0) when no cell
-        covers it."""
-        W_, S_, E_, N_ = box
-        rbox = tuple(round(v, 3) for v in box)
-        tag = f"{year}_{'-'.join(LS_PERIODS)}_{'_'.join(f'{v:.3f}' for v in rbox)}"
-        fp = {m: os.path.join(CACHE_DIR, "landsat", f"{tag}_{m}.png") for m in ("tc", "ndvi")}
-        if all(os.path.exists(v) for v in fp.values()):
-            out = {}
-            for m, v in fp.items():
-                with open(v, "rb") as f:
-                    out[m] = f.read()
-            return out, rbox, 0
+    def _encode(rgba):
+        buf = io.BytesIO()
+        Image.fromarray(np.ascontiguousarray(rgba), mode="RGBA").save(buf, format="PNG")
+        return buf.getvalue()
+
+    def _gained(png):
+        """The true-colour PNG under the picture scale (gain 1 is the PNG)."""
+        g = _gain["v"]
+        if g == 1.0:
+            return png
+        a = np.asarray(Image.open(io.BytesIO(png)).convert("RGBA"))
+        out = np.concatenate([np.clip(a[..., :3].astype(np.float32) * g, 0, 255).astype(np.uint8), a[..., 3:]], axis=2)
+        return _encode(out)
+
+    def _remember(year, mode, z, x, y, png):
+        """The gain-1 PNG (or None: blank) to memory and disk."""
+        _png[(year, mode, z, x, y)] = png
+        if len(_png) > 6000:
+            _png.pop(next(iter(_png)))
+        fp = _fp(year, mode, z, x, y)
+        os.makedirs(os.path.dirname(fp), exist_ok=True)
+        with open(fp, "wb") as f:
+            f.write(png or b"")
+
+    async def _render(year, mode, z, x, y):
+        """The gain-1 PNG for the tile, or None (blank): the read."""
+        T = RASTER_TILE
+        W_, S_, E_, N_ = _tile_ll(z, x, y)
+        lon_c = W_ + (np.arange(T) + 0.5) * (E_ - W_) / T
+        n = 2 ** z
+        world = 2 * math.pi * _R
+        tpx = world / (n * T)
+        ty1 = world / 2 - y * world / n
+        ys = ty1 - (np.arange(T) + 0.5) * tpx
+        lat_c = np.degrees(np.arctan(np.sinh(ys / _R)))
+        level_px = (E_ - W_) / T
+        bands = LS_BANDS[:3] if mode == "tc" else (LS_BANDS[0], LS_BANDS[3])
+        raw = np.zeros((len(bands), T, T), np.uint8)
+        jobs = []
+        for lat0 in range(int(math.floor(S_)), int(math.ceil(N_))):
+            for lon0 in range(int(math.floor(W_)), int(math.ceil(E_))):
+                cell = _cell_name(lat0, lon0)
+                for k, band in enumerate(bands):
+                    jobs.append(_band_into(_path(year, cell, band), raw[k], lon_c, lat_c, level_px))
+        got = await asyncio.gather(*jobs)
+        _stat["bytes"] += sum(got)
+        if mode == "tc":
+            alpha = (raw > 0).all(0)
+            if not alpha.any() or _stretch["v"] is None:
+                return None
+            out = np.zeros((T, T, 4), np.uint8)
+            for k in range(3):
+                lo, hi = _stretch["v"][k]
+                out[..., k] = np.clip((raw[k].astype(np.float32) - lo) / (hi - lo) * 255, 0, 255).astype(np.uint8)
+            out[..., 3] = np.where(alpha, 255, 0)
+            return _encode(out)
+        rgb, valid = ndvi_rgb(raw[0], raw[1])
+        if not valid.any():
+            return None
+        out = np.zeros((T, T, 4), np.uint8)
+        out[..., :3] = rgb
+        out[..., 3] = np.where(valid, 255, 0)
+        return _encode(out)
+
+    async def _tile(year, mode, z, x, y):
+        """The gain-1 PNG or None, from memory, disk, or Copernicus."""
+        key = (year, mode, z, x, y)
+        if key in _png:
+            return _png[key]
+        fp = _fp(year, mode, z, x, y)
+        if os.path.exists(fp):
+            with open(fp, "rb") as f:
+                png = f.read() or None
+            _png[key] = png
+            return png
+        t0 = time.time()
+        png = await _render(year, mode, z, x, y)
+        _remember(year, mode, z, x, y, png)
+        _stat["served" if png is not None else "blank"] += 1
+        _stat["ms"] += 1000 * (time.time() - t0)
+        return png
+
+    async def _prefetch_worker():
+        try:
+            while _queue:
+                if _stat["live"] > 0:
+                    await asyncio.sleep(0.2)
+                    continue
+                key = _queue.pop(0)
+                _queued.discard(key)
+                year, mode, z, x, y = key
+                try:
+                    if key not in _png and not os.path.exists(_fp(year, mode, z, x, y)):
+                        await _tile(year, mode, z, x, y)
+                        _stat["prefetched"] += 1
+                except Exception:
+                    pass
+        finally:
+            _worker["task"] = None
+
+    def _prefetch(year, mode, z, x, y):
+        for i in range(1, LS_PREFETCH + 1):
+            yy = year - i
+            if yy not in LS_YEARS:
+                break
+            key = (yy, mode, z, x, y)
+            if key in _png or key in _queued:
+                continue
+            _queue.append(key)
+            _queued.add(key)
+        while len(_queue) > 2000:
+            _queued.discard(_queue.pop(0))
+        if _queue and _worker["task"] is None:
+            _worker["task"] = asyncio.get_running_loop().create_task(_prefetch_worker())
+
+    async def ls_tile_png(z, x, y, year, mode="tc"):
+        """PNG bytes for Web Mercator tile (z, x, y) of the year's Landsat
+        mosaic, true colour (`tc`, B03 B02 B01 under the locked stretch and
+        the picture scale) or `ndvi` (B03 and B04 on the fixed Emrld scale);
+        None below LS_TILE_MIN_Z, above LS_MAX_Z, or where no cell has data."""
+        if z < LS_TILE_MIN_Z or z > LS_MAX_Z or year not in LS_YEARS:
+            return None
         if _store is None:
             raise RuntimeError("no CDSE key (CDSE_S3_ACCESS_KEY / CDSE_S3_SECRET_KEY)")
-        t0 = time.time()
-        # the output grid: native 30 m columns, Mercator-even rows, capped
-        w = int(math.ceil((E_ - W_) / LS_PX))
-        h = int(math.ceil((N_ - S_) / LS_PX))
-        s = max(1.0, math.sqrt(w * h / LS_MAX_PX))
-        w, h = max(8, int(w / s)), max(8, int(h / s))
-        lon_c = W_ + (np.arange(w) + 0.5) * (E_ - W_) / w
-        y0, y1 = merc_y(N_), merc_y(S_)
-        lat_c = np.array([merc_lat(y0 + (i + 0.5) * (y1 - y0) / h) for i in range(h)])
-        level_px = (E_ - W_) / w
-        loop = asyncio.get_running_loop()
-        stack = []
-        nbytes = 0
-        for period in LS_PERIODS:
-            feats = await loop.run_in_executor(None, _stac, box, year, period)
-            rgb = np.zeros((len(LS_BANDS), h, w), np.uint8)
-            jobs = []
-            for f in feats:
-                b = f.get("bbox")
-                if b and not (b[0] < E_ and b[2] > W_ and b[1] < N_ and b[3] > S_):
-                    continue
-                for k, band in enumerate(LS_BANDS):
-                    a = f["assets"].get(band)
-                    if a:
-                        jobs.append(_band_into(a["href"], rgb[k], lon_c, lat_c, level_px))
-            got = await asyncio.gather(*jobs)
-            nbytes += sum(got)
-            stack.append(rgb)
-        _bytes["n"] += nbytes
-        if not stack:
-            return None, rbox, nbytes
-        # the median, the stretch and the PNG run in a thread: the event loop
-        # (the widget's comm, the fold) stays live under a fetch
-        pngs = await loop.run_in_executor(None, _compose, stack, h, w, rbox)
-        if pngs is None:
-            return None, rbox, nbytes
-        for m, v in pngs.items():
-            with open(fp[m], "wb") as f:
-                f.write(v)
-        _bytes["t"] = time.time() - t0
-        return pngs, rbox, nbytes
-
-    def _compose(stack, h, w, rbox):
-        S = np.stack(stack, 0).astype(np.float32)
-        S[S == 0] = np.nan
-        import warnings
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)
-            m = np.nanmedian(S, axis=0) if len(stack) > 1 else S[0]
-        alpha = np.isfinite(m[:3]).all(0)
-        if not alpha.any():
+        _stat["live"] += 1
+        try:
+            png = await _tile(year, mode, z, x, y)
+        finally:
+            _stat["live"] -= 1
+        _prefetch(year, mode, z, x, y)
+        if png is None:
             return None
-        if rbox not in _stretch:
-            st = []
-            for k in range(3):
-                lo, hi = (float(q) for q in np.nanpercentile(m[k][alpha], [2, 98]))
-                st.append((lo, hi if hi > lo else lo + 1.0))
-            _stretch[rbox] = st
-        out = np.zeros((h, w, 4), np.uint8)
-        for k in range(3):
-            lo, hi = _stretch[rbox][k]
-            out[..., k] = np.clip((np.nan_to_num(m[k], nan=lo) - lo) / (hi - lo) * 255, 0, 255).astype(np.uint8)
-        out[..., 3] = np.where(alpha, 255, 0)
-        buf = io.BytesIO()
-        Image.fromarray(np.ascontiguousarray(out), mode="RGBA").save(buf, format="PNG")
-        pngs = {"tc": buf.getvalue()}
-        # NDVI from the red (B03) and NIR (B04) bands, the fixed scale
-        rgb, valid = ndvi_rgb(np.nan_to_num(m[0], nan=0.0), np.nan_to_num(m[3], nan=0.0))
-        nd = np.zeros((h, w, 4), np.uint8)
-        nd[..., :3] = rgb
-        nd[..., 3] = np.where(valid & np.isfinite(m[3]), 255, 0)
-        buf = io.BytesIO()
-        Image.fromarray(np.ascontiguousarray(nd), mode="RGBA").save(buf, format="PNG")
-        pngs["ndvi"] = buf.getvalue()
-        return pngs
+        return _gained(png) if mode == "tc" else png
 
-    return ls_bytes, ls_cached, ls_ready, ls_still
+    return ls_raster_stats, ls_ready, ls_set_scale, ls_tile_png
 
 
 @app.cell
@@ -1189,17 +1291,17 @@ def _(
 def _(anywidget, asyncio, traitlets):
     class PairMap(anywidget.AnyWidget):
         """Two maplibre maps in a row, one camera. LEFT: the S2 mosaic as tiles
-        the kernel renders (custom messages, PNG bytes back), keyed by year, and
-        Landsat stills the kernel pushes (custom `still` messages with bounds).
+        the kernel renders (custom messages, PNG bytes back), keyed by source
+        (`s2` or `ls`), year and mode.
         RIGHT: an H3HexagonLayer (highPrecision) from cell ids + rgba. Hover on
         either pane: h3-js cell at the frame's res, its ring drawn on BOTH.
 
         Kernel -> browser: `cells` (uint64 LE), `colors` (rgba u8), `config`
         (JSON), `status` / `panel` / `legend` (strings for the strip), custom
-        `tile` replies, `still` / `still_clear`.
+        `tile` replies.
         Browser -> kernel: `view` (JSON lon/lat/zoom + the pane's w/h on every
         moveend), `pick` (JSON: the clicked cell as hex, or null), `ctl`
-        (JSON: picture year, s2 scale, the window, fill, labels, a landsat
+        (JSON: picture year, picture scale, the window, fill, labels
         request)."""
 
         cells = traitlets.Bytes(b"").tag(sync=True)
@@ -1380,8 +1482,8 @@ def _(anywidget, asyncio, traitlets):
             ".sp-year{height:30px;width:340px}",
             ".sp-year .tks{position:absolute;left:8px;right:8px;top:19px;display:flex;justify-content:space-between;font-size:9px;color:#6b6b68;line-height:1}",
             ".sp-year .tks span{width:0;display:flex;justify-content:center}",
-            // the Landsat leg of the track, dashed: a still has to be asked for
-            ".sp-year .ls{position:absolute;left:8px;top:9px;height:4px;border-top:0;background:repeating-linear-gradient(90deg,rgba(29,29,27,.22) 0 4px,transparent 4px 8px);border-radius:2px}",
+            // the Landsat leg of the track, a shade darker: the other sensor
+            ".sp-year .ls{position:absolute;left:8px;top:9px;height:4px;background:rgba(29,29,27,.34);border-radius:2px}",
           ].join("\n");
           el.appendChild(sty);
           // a tick label every fifth year (and the ends); the rest empty
@@ -1439,14 +1541,13 @@ def _(anywidget, asyncio, traitlets):
           const yrTks = document.createElement("span"); yrTks.className = "tks";
           picYears.forEach((y, i, arr) => { const t = document.createElement("span"); const l = document.createElement("i"); l.style.fontStyle = "normal"; l.textContent = tickLabel(y, i, arr); t.appendChild(l); yrTks.appendChild(t); });
           const yri = document.createElement("input"); yri.type = "range"; yri.min = 0; yri.max = Math.max(0, picYears.length - 1); yri.step = 1;
-          yri.title = "which picture is drawn: Sentinel-2 2022-2025 live, Landsat 1997-2021 as a still once fetched (arrow keys, or [ and ])";
+          yri.title = "which picture is drawn: Sentinel-2 2022-2025, Landsat 1997-2021, live tiles both (arrow keys, or [ and ])";
           const yrTxt = document.createElement("span");
           yrTxt.className = "sp-yeartxt";
           yrTxt.style.cssText = "font-variant-numeric:tabular-nums;min-width:8em";
           yr.append(yrTrk, yrLs, yrSpn, yrTks, yri);
           yrWrap.append(yrLab, yr, yrTxt);
           rowOf(L.head).appendChild(yrWrap);
-          const held = () => { const h = new Set((cfg.ls_held || []).map(Number)); for (const st of stills.values()) h.add(st.year); return h; };
           styleS2 = () => {
             const i = Math.max(0, picYears.indexOf(s2y)), n = Math.max(1, picYears.length - 1);
             yri.value = i;
@@ -1454,7 +1555,7 @@ def _(anywidget, asyncio, traitlets):
             yrSpn.style.width = Math.max(0, usable * i / n) + "px";
             yrLs.style.width = Math.max(0, usable * Math.max(0, lsYears.length - 1) / n) + "px";
             let t = String(s2y);
-            if (isLs(s2y)) t += held().has(s2y) ? " Landsat" : (cfg.ls_ok ? " not fetched (k)" : " no Landsat key");
+            if (isLs(s2y)) t += cfg.ls_ok ? " Landsat" : " Landsat, no key";
             else t += " Sentinel-2";
             yrTxt.textContent = t;
             try { renderLegendL(); } catch (e) {}
@@ -1475,7 +1576,7 @@ def _(anywidget, asyncio, traitlets):
           const renderLegendL = () => {
             legendL.replaceChildren();
             const ls = isLs(s2y);
-            const who = ls ? (held().has(s2y) ? "Landsat " + s2y : "Landsat " + s2y + " not fetched, Sentinel-2 " + s2First + " shown") : "Sentinel-2 " + s2y;
+            const who = ls ? (cfg.ls_ok ? "Landsat " + s2y : "Landsat " + s2y + ", no CDSE key in the environment") : "Sentinel-2 " + s2y;
             const s = document.createElement("span");
             s.style.cssText = "display:inline-flex;align-items:center;gap:.35rem";
             if (picMode === "ndvi") {
@@ -1492,22 +1593,6 @@ def _(anywidget, asyncio, traitlets):
             legendL.appendChild(s);
           };
           const styleNdvi = () => { renderLegendL(); };
-          // the Landsat buttons: fetch this year / all years for the box in view
-          // (their own row: the card must stay inside its pane)
-          rowBreak(L.head);
-          const lsBtns = [
-            {value: "one", label: "fetch this year", title: "read the picture year's Landsat mosaic for the box in view (a few MB from Copernicus) and pin it there as a still (key k)"},
-            {value: "all", label: "fetch all years", title: "queue every Landsat year 1997-2021 not yet held for the box in view, one after another in the background (key j)"},
-          ];
-          let lsPressed = "";
-          const styleLs = mkGroup(L.head, "landsat", lsBtns, () => lsPressed, (v) => { lsPressed = v; }, "ls", "sp-ls", () => false);
-          // the last Landsat word, kept here where a pan's status cannot overwrite it
-          const lsNote = document.createElement("span");
-          lsNote.className = "sp-lsnote";
-          lsNote.style.cssText = "font-size:11px;color:#6b6b68;max-width:26rem;overflow:hidden;text-overflow:ellipsis";
-          const styleNote = () => { lsNote.textContent = cfg.ls_note || ""; lsNote.title = cfg.ls_note || ""; };
-          rowOf(L.head).appendChild(lsNote);
-          styleNote();
           // the S2 scale
           const SC_MIN = 0.2, SC_MAX = 3;
           const scWrap = document.createElement("span");
@@ -1650,7 +1735,7 @@ def _(anywidget, asyncio, traitlets):
           window.addEventListener("resize", () => { paneHeight(); });
           const hint = document.createElement("div");
           hint.style.cssText = mono + ";opacity:.55";
-          hint.textContent = "keys: [ ] picture year · n true colour / NDVI · k Landsat this year · j all years · ; ' S2 scale · 1-3 fill · - = window from · _ + window to · L labels · F full screen · click a hexagon for its story";
+          hint.textContent = "keys: [ ] picture year · n true colour / NDVI · ; ' picture scale · 1-3 fill · - = window from · _ + window to · L labels · F full screen · click a hexagon for its story";
           hint.style.color = "#666";
           strip.appendChild(hint);
           hint.hidden = !!cfg.minimal;
@@ -1660,7 +1745,6 @@ def _(anywidget, asyncio, traitlets):
             if (e.target && /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) return;
             setTimeout(() => { try { root.focus({preventScroll: true}); } catch (err) {} }, 0);
           });
-          const askLs = (which) => { send("ls", {ls: which}); };
           root.addEventListener("keydown", (e) => {
             if (e.target && /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) return;
             const k = e.key;
@@ -1670,15 +1754,11 @@ def _(anywidget, asyncio, traitlets):
             else if (k === "-" || k === "=") { const v = step(winYears, y0, k === "=" ? 1 : -1); if (v < y1) { y0 = v; styleWin(); winRelease(); } }
             else if (k === "_" || k === "+") { const v = step(winYears, y1, k === "+" ? 1 : -1); if (v > y0) { y1 = v; styleWin(); winRelease(); } }
             else if (k === "n" || k === "N") { picMode = picMode === "ndvi" ? "tc" : "ndvi"; styleMode(); styleNdvi(); update(); send("mode"); }
-            else if (k === "k" || k === "K") { askLs("one"); }
-            else if (k === "j" || k === "J") { askLs("all"); }
             else if (k === "l" || k === "L") { labelsOn = !labelsOn; labels(labelsOn); send("labels"); }
             else if (k === "f" || k === "F") { toggleFull(); }
             else return;
             e.preventDefault();
           });
-          // the Landsat buttons send a ctl with `ls`; mkGroup's own send("ls") lacks it, so re-send here
-          for (const b of L.head.querySelectorAll(".sp-ls")) b.onclick = () => { askLs(b.dataset.value); };
 
           const say = (t) => {
             status.textContent = t || "";
@@ -1731,33 +1811,12 @@ def _(anywidget, asyncio, traitlets):
             dataObj = N && colors ? {length: N} : null;
           }
 
-          // ---- S2 tiles: ask the kernel; Landsat stills: pushed by it -------
+          // ---- the picture tiles, both sensors: ask the kernel ---------------
           const pending = new Map();
           let tseq = 0;
           const tstat = {asked: 0, got: 0, empty: 0, err: 0, abort: 0};
-          const stills = new Map();  // "year|bounds" -> {year, image, bounds, seq}
-          const LS_KEEP = 80;  // two modes per year
-          let stillSeq = 0;
           model.on("msg:custom", (msg, buffers) => {
             if (!msg) return;
-            if (msg.kind === "still_clear") { stills.clear(); stillSeq++; update(); return; }
-            if (msg.kind === "still") {
-              if (!buffers || !buffers.length) return;
-              const u8 = bytesOf(buffers[0]);
-              createImageBitmap(new Blob([u8], {type: "image/png"})).then((b) => {
-                const key = msg.year + "|" + (msg.mode || "tc") + "|" + msg.bounds.map((v) => v.toFixed(3)).join(",");
-                const old = stills.get(key);
-                if (old && old.image && old.image.close) { try { old.image.close(); } catch (e) {} }
-                stills.set(key, {year: Number(msg.year), mode: msg.mode || "tc", image: b, bounds: msg.bounds, seq: ++stillSeq});
-                while (stills.size > LS_KEEP) {
-                  const k0 = stills.keys().next().value; const s0 = stills.get(k0);
-                  if (s0 && s0.image && s0.image.close) { try { s0.image.close(); } catch (e) {} }
-                  stills.delete(k0);
-                }
-                styleS2(); update();
-              }, (e) => say("still: " + e.message));
-              return;
-            }
             if (msg.kind !== "tile") return;
             const p = pending.get(msg.id);
             if (!p) return;
@@ -1792,7 +1851,7 @@ def _(anywidget, asyncio, traitlets):
               widthUnits: "pixels", getWidth: width, widthMinPixels: 1, beforeId: slot()});
           };
           const mkRaster = (src, year, maxZ, extent, visible, mode) => new TileLayer({
-            id: src + "-" + year + "-" + (mode || "tc") + (src === "s2" && cfg.s2_gen && (mode || "tc") === "tc" ? "-s" + cfg.s2_gen : ""),
+            id: src + "-" + year + "-" + (mode || "tc") + (cfg.s2_gen && (mode || "tc") === "tc" ? "-s" + cfg.s2_gen : ""),
             getTileData: getTileDataFor(src, year, mode),
             onTileError: (e) => { if (!e || e.name !== "AbortError") say(src + " tile: " + ((e && e.message) || e)); },
             tileSize: cfg.tile || 256,
@@ -1810,16 +1869,11 @@ def _(anywidget, asyncio, traitlets):
           const hexZoomOk = () => !!mapR && mapR.getZoom() >= (cfg.hex_zoom || 9);
           function layersLeft() {
             const out = [];
-            // a Landsat year draws its still (if held) over S2's first year,
-            // which keeps drawing around the box; an S2 year is its tiles
-            const ls = isLs(s2y);
-            const s2year = ls ? s2First : s2y;
-            out.push(mkRaster("s2", s2year, 14, null, true, picMode));
-            if (ls) for (const [key, st] of stills) {
-              if (st.year !== Number(s2y) || st.mode !== picMode) continue;
-              const [w, s, e, n] = st.bounds;
-              out.push(new BitmapLayer({id: "ls-" + key, image: st.image, bounds: [w, s, e, n], beforeId: slot()}));
-            }
+            // one sensor at a time: a Landsat year is its own tile layer (only
+            // with a key; without one the pane is the basemap and the legend
+            // says why), an S2 year is its tiles
+            if (isLs(s2y)) { if (cfg.ls_ok) out.push(mkRaster("ls", s2y, cfg.ls_max_z || 12, null, true, picMode)); }
+            else out.push(mkRaster("s2", s2y, 14, null, true, picMode));
             const h = outline("hover-l", hover, [255, 255, 255, 255], 2);
             if (h) out.push(h);
             const pk = cfg.hit ? outline("picked-l", cfg.hit, [255, 200, 40, 255], 3) : null;
@@ -1928,7 +1982,7 @@ def _(anywidget, asyncio, traitlets):
             }
             window.__spTiles = tstat;
             window.__spMaps = () => [mapL, mapR];
-            window.__spLayers = () => ({left: layersLeft().map((l) => l.id), right: layersRight().map((l) => l.id), N, res, stills: [...stills.keys()]});
+            window.__spLayers = () => ({left: layersLeft().map((l) => l.id), right: layersRight().map((l) => l.id), N, res});
           }
 
           let pendingLoad = null, needCells = false;
@@ -1970,6 +2024,7 @@ def _(
     HEX_ZOOM,
     HOME,
     LABELS_SLOT,
+    LS_MAX_Z,
     LS_YEARS,
     NDVI_HEX,
     NDVI_HI,
@@ -1993,7 +2048,7 @@ def _(
         "height": VIEW_H, "home": dict(HOME), "labels": True, "labels_slot": LABELS_SLOT, "tile": RASTER_TILE,
         "s2_year": S2_YEAR0, "s2_scale": S2_SCALE0, "s2_gen": 0, "fill": FILLS[0],
         "s2_years": list(S2_YEARS), "ls_years": list(LS_YEARS), "pic_years": list(PIC_YEARS),
-        "ls_ok": bool(ls_ready()), "ls_held": [], "ls_note": "" if ls_ready() else "no CDSE key in the environment",
+        "ls_ok": bool(ls_ready()), "ls_max_z": LS_MAX_Z,
         "pic_mode": "tc", "pic_modes": [list(m) for m in PIC_MODES], "ndvi_ramp": NDVI_HEX, "ndvi_lo": NDVI_LO, "ndvi_hi": NDVI_HI,
         "win_from": WIN_FROM0, "win_to": WIN_TO0, "win_years": list(CT_YEARS),
         "fills": [[f, FILL_SHORT[f], FILL_NAMES[f]] for f in FILLS],
@@ -2006,7 +2061,6 @@ def _(
         "s2y": S2_YEAR0, "s2scale": S2_SCALE0, "s2gen": 0, "fill": FILLS[0], "labels": True, "mode": "tc",
         "y0": WIN_FROM0, "y1": WIN_TO0,
         "hit": None, "memo": {}, "ct": {}, "h_cam": None, "h_ctl": None, "h_pick": None,
-        "ls_have": set(), "ls_busy": False, "ls_queue": [], "ls_bytes": 0,
         "runs": 0,
     }
     pair
@@ -2033,9 +2087,9 @@ def _(
     contains,
     ct_fold,
     json,
-    ls_cached,
-    ls_ready,
-    ls_still,
+    ls_raster_stats,
+    ls_set_scale,
+    ls_tile_png,
     np,
     pad_box,
     pair,
@@ -2055,6 +2109,8 @@ def _(
     HOLD["runs"] += 1
 
     async def _tile_fn(src, z, x, y, year, mode="tc"):
+        if src == "ls":
+            return await ls_tile_png(z, x, y, year, mode)
         return await s2_tile_png(z, x, y, year, mode)
 
     pair.tile_fn = _tile_fn
@@ -2109,8 +2165,11 @@ def _(
         return True
 
     def _ls_line():
-        b = HOLD["ls_bytes"]
-        return f" · Landsat {b / 1e6:.0f} MB asked this session" if b else ""
+        st = ls_raster_stats()
+        if not st["served"] and not st["blank"] and not st["bytes"]:
+            return ""
+        return (f" · Landsat tiles {st['served']:,} served, {st['blank']:,} empty, {st['prefetched']:,} ahead"
+                f" · {st['bytes'] / 1e6:.0f} MB from Copernicus this session")
 
     async def _serve(vs, force=False):
         vsd = _vsd(vs)
@@ -2223,72 +2282,6 @@ def _(
     pair.observe(_on_camera, names="view")
     HOLD["h_cam"] = _on_camera
 
-    # ---- Landsat: the stills, one box, fetched on request ----------------------
-    # Stills ACCUMULATE: each is pinned to the box it was fetched for and
-    # every still of the chosen year draws where it was fetched (Stephen:
-    # "when you move around, you don't move around with the Landsat"). A
-    # fetch for a new box adds to them; nothing is cleared (the browser keeps
-    # the last LS_KEEP). The last Landsat word stays in the left header
-    # (`ls_note`), where a pan's status line cannot overwrite it.
-    def _ls_note(msg):
-        _cfg(ls_note=msg)
-        _say(msg)
-
-    async def _ls_run():
-        if HOLD["ls_busy"]:
-            return
-        HOLD["ls_busy"] = True
-        try:
-            while HOLD["ls_queue"]:
-                y, box = HOLD["ls_queue"].pop(0)
-                rbox = tuple(round(v, 3) for v in box)
-                if (y, rbox) in HOLD["ls_have"]:
-                    continue
-                t0 = time.time()
-                _ls_note(f"Landsat {y}: fetching ({len(HOLD['ls_queue'])} more queued)…")
-                try:
-                    pngs, bounds, nbytes = await ls_still(box, y)
-                except Exception as e:
-                    _ls_note(f"Landsat {y} failed: {type(e).__name__}: {str(e)[:160]}")
-                    continue
-                HOLD["ls_bytes"] += nbytes
-                if pngs is None:
-                    _ls_note(f"Landsat {y}: no cell covers this box" + _ls_line())
-                    continue
-                HOLD["ls_have"].add((y, rbox))
-                for m, png in pngs.items():
-                    pair.send({"kind": "still", "year": y, "mode": m, "bounds": list(bounds)}, buffers=[png])
-                _cfg(ls_held=sorted({yy for yy, _ in HOLD["ls_have"]}))
-                _ls_note(f"Landsat {y}: held ({sum(len(v) for v in pngs.values()) / 1e6:.1f} MB PNG, {nbytes / 1e6:.0f} MB read, {time.time() - t0:.1f} s)"
-                         + (f" · {len(HOLD['ls_queue'])} queued" if HOLD["ls_queue"] else "") + _ls_line())
-        finally:
-            HOLD["ls_busy"] = False
-
-    def _ls_ask(which, year):
-        if not ls_ready():
-            _ls_note("no CDSE key: set CDSE_S3_ACCESS_KEY and CDSE_S3_SECRET_KEY (docs/14 says where to get them) and restart")
-            return
-        vsd = _vsd(HOLD["vs"])
-        box = HOLD["box"] if HOLD["box"] is not None else pad_box(view_to_bbox(vsd))
-        rbox = tuple(round(v, 3) for v in box)
-        if which == "one":
-            if year not in LS_YEARS:
-                _ls_note(f"{year} is a Sentinel-2 year; move the picture slider to 1997..2021 for Landsat")
-                return
-            years = [year]
-        else:
-            first = [year] if year in LS_YEARS else []
-            years = first + [y for y in LS_YEARS if y != year]
-        queued = {(y, tuple(round(v, 3) for v in b)) for y, b in HOLD["ls_queue"]}
-        n = 0
-        for y in years:
-            if (y, rbox) not in HOLD["ls_have"] and (y, rbox) not in queued:
-                HOLD["ls_queue"].append((y, box))
-                n += 1
-        if n == 0:
-            _ls_note(f"Landsat {year}: already held for this box" if which == "one" else "Landsat: every year already held or queued for this box")
-        _spawn(_ls_run())
-
     def _f(v, d=1):
         return "n/a" if v is None or (isinstance(v, float) and np.isnan(v)) else f"{v:.{d}f}"
 
@@ -2397,25 +2390,18 @@ def _(
                 HOLD["s2y"] = y
                 _cfg(s2_year=y)
                 _say((HOLD.get("last_status") or "") + (f" · Landsat {y}" if y in LS_YEARS else f" · Sentinel-2 {y}"))
-                # a Landsat year already on disk for this box loads itself (no
-                # bytes from Copernicus); a year that is not waits for k
-                if y in LS_YEARS and ls_ready():
-                    vsd = _vsd(HOLD["vs"])
-                    box = HOLD["box"] if HOLD["box"] is not None else pad_box(view_to_bbox(vsd))
-                    rbox = tuple(round(v, 3) for v in box)
-                    if (y, rbox) not in HOLD["ls_have"] and ls_cached(box, y):
-                        _ls_ask("one", y)
             return
         if act == "s2scale":
             try:
                 v = float(min(3.0, max(0.2, float(c.get("s2scale", HOLD["s2scale"])))))
             except (TypeError, ValueError):
                 return
-            if s2_set_scale(v):
+            # one gain for both sensors' true colour
+            if s2_set_scale(v) | ls_set_scale(v):
                 HOLD["s2scale"] = v
                 HOLD["s2gen"] += 1
                 _cfg(s2_scale=v, s2_gen=HOLD["s2gen"])
-                _say((HOLD.get("last_status") or "") + f" · Sentinel-2 scale {v:.1f}× · tiles re-served")
+                _say((HOLD.get("last_status") or "") + f" · picture scale {v:.1f}× · tiles re-served")
             return
         if act == "win":
             a, b = int(c.get("y0", HOLD["y0"])), int(c.get("y1", HOLD["y1"]))
@@ -2431,9 +2417,6 @@ def _(
                 _cfg(fill=f)
                 if _paint():
                     _say((HOLD.get("last_status") or "") + f" · {FILL_NAMES[f]}")
-            return
-        if act == "ls":
-            _ls_ask(c.get("ls", "one"), int(c.get("s2y", HOLD["s2y"])))
             return
         if act == "mode":
             m = c.get("mode", "tc")

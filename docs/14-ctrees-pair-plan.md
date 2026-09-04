@@ -199,28 +199,43 @@ onto a Landsat year already on disk for the box loads it without a key
 press.
 Marimo lesson: a cell-private `_name` referenced before its `def` in the
 same cell fails at run time with a mangled NameError; define helpers
-above their callers.
+above their callers. (Marimo 0.24 deletes a cell's private names after
+the cell runs unless its closure scan sees a function using them, and
+the scan misses a helper defined below the function that references it.)
+Round 4 (same day, Stephen: "only one tile is updating, the rest of the
+tiles are staying the same... it's never worked"): the still is gone.
+A Landsat year is a tile layer like a Sentinel-2 year, the same
+`(z, x, y, year, mode)` request to the kernel and one PNG back, so the
+whole pane changes with the slider and pans like a map. No STAC call:
+the mosaic path follows from the year, the period and the 1-degree cell
+name (the corner nearest the equator and the prime meridian: 11S062W for
+[-63, -12, -62, -11], 40N100W for [-101, 40, -100, 41], 30S120E for
+[120, -31, 121, -30]; probed), and the search endpoint rate-limits at a
+handful of calls a second anyway. Reads go through async-geotiff's
+overviews (z7 to z12, deck scales the z12 tile past that) under the
+four-connection semaphore; tiles are cached in memory and on disk by
+(year, mode, z, x, y), a zero-byte file for an empty tile, so a second
+session reads nothing. One true-colour stretch for every tile of every
+year, the p2-p98 of the coarsest overview of the first file opened,
+written as `stretch.json` beside the cache (delete it to lock a new
+one); the scale slider is a gain on both sensors. After a live tile, the
+same tile for the year below is queued and fetched once the live
+requests go quiet, because the slider walks down from 2022. The Landsat
+buttons, the k and j keys, the "not fetched" state and the pinned stills
+are gone with it.
 
 - **Picture slider**: 1997 to 2025 in one control. 2022 to 2025 are the S2
-  mosaics, live tiles. 1997 to 2021 are Landsat years: the readout says
-  "not fetched" until a still is held; then the still is drawn over S2
-  2022 (which keeps drawing around it) at the box it was fetched for.
-  Arrows and `[` `]` step it as before; the scale slider is the S2 gain.
-- **Landsat buttons** (left header): `this year` (key `k`) fetches the
-  picture year for the box in view (the fold's padded box when the
-  hexagons are on, else the padded view); `all years` (key `j`) fetches
-  every Landsat year not yet held for that box, in the background, one at
-  a time. A fetch for a different box clears the stills. Stills are
-  cached on disk under the tmp cache dir as PNG plus bounds, keyed by year,
-  period and box, so a second session on the same box reads no bytes.
-- **The still**: for each period in LS_PERIODS (default one, `07-08`; more
-  than one and the median is taken), the STAC search for the box and the
-  period's first day, then B03/B02/B01 windows from each degree cell,
-  nearest-sampled onto an output grid of the box (columns even in lon,
-  rows even in Mercator y so deck's BitmapLayer is exact) at 30 m capped
-  at LS_MAX_PX, a per-band p2-p98 stretch, alpha where any band is
-  nonzero. Four connections at once (the quota). The status line carries
-  a running total of the bytes asked for this session.
+  mosaics, 1997 to 2021 the Landsat mosaics, live tiles both; the Landsat
+  leg of the track is a shade darker. Arrows and `[` `]` step it; the
+  scale slider is the true-colour gain for both sensors. Without a CDSE
+  key a Landsat year draws nothing and the legend says so.
+- **Landsat tiles**: for the period LS_PERIOD (`07-08`), the tile's
+  1-degree cells (one to four), B03/B02/B01 (true colour) or B03/B04
+  (NDVI) windows from each cell's COG at the overview whose pixel is at
+  most the tile's, nearest-sampled onto the tile (columns even in lon,
+  rows even in Mercator y), alpha where every band is nonzero. The status
+  line carries the tiles served, the tiles fetched ahead and the bytes
+  asked for this session.
 
 ### What stays open
 
@@ -233,8 +248,11 @@ above their callers.
    smoothed product; the click story prints the series so it can be read
    against the fill.
 4. Licence of the CDSE copy of the Landsat mosaics.
-5. The Landsat cell is written against the STAC's stated layout (EPSG:4326,
-   uint8, 0.00025 degrees) and has not been run: no key here yet.
+5. The Landsat tile cell is written against the STAC's stated layout
+   (EPSG:4326, uint8, 0.00025 degrees, COGs with overviews) and its read
+   path was exercised against a public Sentinel-2 COG only: no key here.
+   The uint8 scale of the mosaics is unknown, which is why the stretch is
+   measured rather than fixed.
 
 ## Watch-outs
 
