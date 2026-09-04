@@ -195,10 +195,12 @@ def _(os, tempfile):
     # Each source offers what it has: Sentinel-2 yearly mosaics 2022-2025 (2025
     # is in the bucket, not yet in the STAC), AlphaEarth 2017-2025, WSF Tracker
     # half-years July 2016 .. January 2026. ONE window (from year, to year) is
-    # read by both WSF and AlphaEarth; it opens at 2020..2023.
+    # read by both WSF and AlphaEarth; it opens at 2022..2025, the years the
+    # S2 mosaics cover, so the picture on the left has a frame for every year
+    # the window holds (Stephen, 2026-09-04).
     S2_YEARS = (2022, 2023, 2024, 2025)
     AEF_YEARS_ALL = tuple(range(2017, 2026))
-    AEF_FROM0, AEF_TO0 = 2020, 2023
+    AEF_FROM0, AEF_TO0 = 2022, 2025
     S2_YEAR0 = 2022
     # the S2 mosaic's opening `scale`: a gain on the TCI bytes (1 = as served)
     S2_SCALE0 = 1.0
@@ -266,13 +268,13 @@ def _(os, tempfile):
     HEX_ZOOM = 9.0
     LABELS_SLOT = "watername_ocean"
     RASTER_TILE = 256
-    # home: Egypt's New Administrative Capital, 45 km east of Cairo. Bare
-    # desert in 2016, a city of ministries, towers and ring roads by 2025, all
-    # of it inside WSF's half-year record, and the skies clear enough that the
-    # S2 mosaics show every stage. Zoomed to the second hexagon rung (res 8
-    # at this pane). Paradise, California (the Camp Fire rebuild) was the
-    # first home: -121.60, 39.76.
-    HOME = {"longitude": 31.75, "latitude": 30.01, "zoom": 10.2}
+    # home: Wuhan, where the Photon geocoder lands the user who types it
+    # (Stephen, 2026-09-04): the hit's point and the zoom gcFly derives from
+    # the city's extent at a 700 px pane, which is below HEX_ZOOM, so the right
+    # pane opens on the WSF pyramid tiles and the hexagons fold on the first
+    # zoom in. Earlier homes: Egypt's New Administrative Capital (31.75,
+    # 30.01, zoom 10.2) and Paradise, California (-121.60, 39.76).
+    HOME = {"longitude": 114.29, "latitude": 30.58, "zoom": 7.2}
 
     # a cell GREW when at least this share of its sampled pixels became
     # built-up inside the window; below it the cell counts as quiet for the
