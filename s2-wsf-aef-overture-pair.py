@@ -2707,7 +2707,7 @@ def _(mo):
     - `first_date`: the record's first built-up half-year in the hexagon.
     - `disp`: the AlphaEarth displacement between the ends of the window;
       `disp_max`: its largest single step, with one `step_YYYY` column per
-      step; `moved`: whether the displacement clears the quiet level.
+      step; `moved`: whether a jump year was found inside the window.
     - `when` and `when_name`: the first year the embedding jumped
       (-1 never, -2 no embedding).
 
