@@ -192,10 +192,10 @@ def _(anywidget, traitlets):
         """
 
         _esm = r"""
-        import {Deck, COORDINATE_SYSTEM} from "https://esm.sh/@deck.gl/core@9.3.10?deps=apache-arrow@18.1.0";
-        import {BitmapLayer, LineLayer} from "https://esm.sh/@deck.gl/layers@9.3.10?deps=@deck.gl/core@9.3.10,apache-arrow@18.1.0";
-        import {TileLayer} from "https://esm.sh/@deck.gl/geo-layers@9.3.10?deps=@deck.gl/core@9.3.10,@deck.gl/extensions@9.3.10,@deck.gl/layers@9.3.10,@deck.gl/mesh-layers@9.3.10,apache-arrow@18.1.0";
-        import {SimpleMeshLayer} from "https://esm.sh/@deck.gl/mesh-layers@9.3.10?deps=@deck.gl/core@9.3.10,apache-arrow@18.1.0";
+        import {Deck, COORDINATE_SYSTEM} from "https://esm.sh/@deck.gl/core@9.3.10?deps=apache-arrow@18.1.0,@luma.gl/core@9.3.6,@luma.gl/engine@9.3.6,@luma.gl/webgl@9.3.6,@luma.gl/shadertools@9.3.6";
+        import {BitmapLayer, LineLayer} from "https://esm.sh/@deck.gl/layers@9.3.10?deps=@deck.gl/core@9.3.10,apache-arrow@18.1.0,@luma.gl/core@9.3.6,@luma.gl/engine@9.3.6,@luma.gl/webgl@9.3.6,@luma.gl/shadertools@9.3.6,@luma.gl/gltf@9.3.6";
+        import {TileLayer} from "https://esm.sh/@deck.gl/geo-layers@9.3.10?deps=@deck.gl/core@9.3.10,@deck.gl/extensions@9.3.10,@deck.gl/layers@9.3.10,@deck.gl/mesh-layers@9.3.10,apache-arrow@18.1.0,@luma.gl/core@9.3.6,@luma.gl/engine@9.3.6,@luma.gl/webgl@9.3.6,@luma.gl/shadertools@9.3.6,@luma.gl/gltf@9.3.6";
+        import {SimpleMeshLayer} from "https://esm.sh/@deck.gl/mesh-layers@9.3.10?deps=@deck.gl/core@9.3.10,apache-arrow@18.1.0,@luma.gl/core@9.3.6,@luma.gl/engine@9.3.6,@luma.gl/webgl@9.3.6,@luma.gl/shadertools@9.3.6,@luma.gl/gltf@9.3.6";
         import {latLngToCell} from "https://esm.sh/h3-js@4.5.0";
 
         const CSS = `
