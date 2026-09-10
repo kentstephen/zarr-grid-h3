@@ -55,6 +55,16 @@ the hover name, the county tables, key B. The file name and the molab badge
 still say overture; rename them when this moves to its own repo (Stephen,
 2026-09-02: "i'm gonna probably move this to a new repo anyway").
 
+What came back (Stephen, 2026-09-10) is the PLACE under a click, not the
+lines and not a join: the ladder of Overture divisions holding the point,
+locality up to country, each level named the way Overture names it and the
+country's own word for it beside (city, town, prefecture, governorate). Two
+Source Cooperative sources, the split the New England Landsat pair uses:
+cboettig/overturemaps PMTiles (regions and counties, worldwide) range-read
+by the browser, which names the region and county the instant the click
+lands; fused/overture GeoParquet, one DuckDB point query off the loop for
+the whole ladder, local_type included, 1 to 3 s warm. Both cover the world.
+
 Run: uv run marimo edit s2-wsf-aef-overture-pair.py
 
 Attribution: WSF Tracker (c) DLR and MindEarth, via source.coop
@@ -62,7 +72,8 @@ Attribution: WSF Tracker (c) DLR and MindEarth, via source.coop
 Satellite Embedding dataset is produced by Google and Google DeepMind."
 (CC-BY 4.0.) Sentinel-2 yearly mosaics and Sentinel-2 L2A temporal mosaics
 (CC-BY 4.0) by Earth Genome (Copernicus Sentinel data). Place search by Photon
-(komoot), OpenStreetMap data (ODbL).
+(komoot), OpenStreetMap data (ODbL). Overture Maps divisions (ODbL) via
+Source Cooperative: cboettig/overturemaps (PMTiles), fused/overture (GeoParquet).
 
 TODO (Stephen, 2026-09-02): Overture BUILDINGS from the fused partition on
 source.coop as the next layer, drawn only zoomed in (the bias-bounty tutorial
@@ -303,6 +314,18 @@ def _(os, tempfile):
     # hexagon fill ("wsf built should be the zarr buildings not h3").
     GREW_RAMP = ("#fff7bc", "#fee391", "#fec44f", "#fe9929", "#ec7014", "#cc4c02", "#993404", "#662506")
 
+    # ---- place: Overture Maps divisions, live from Source Cooperative --------
+    # Two repositories, each for what it holds. cboettig/overturemaps (release
+    # 2026-02-18.0) has regions and counties as PMTiles, the world over: the
+    # browser range-reads the tiles it needs and answers a click's region and
+    # county from them. fused/overture (release 2026-05-20-0) has the whole
+    # divisions theme as geo-partitioned GeoParquet, localities and
+    # local_type included, which the PMTiles are not: the ladder under a click
+    # is one DuckDB point query against it. The bucket is open: the s3 path
+    # goes straight to the opendata bucket, no secret.
+    ADMIN_PM = "https://data.source.coop/cboettig/overturemaps/2026-02-18.0"
+    ADMIN_PQ = "s3://us-west-2.opendata.source.coop/fused/overture/2026-05-20-0/theme=divisions"
+
     AEF_PREFIX = "tge-labs/aef-mosaic"
     AEF_RES, AEF_Y0, AEF_X0 = 8.983111749910169e-05, 83.68570533713473, -180.0
     AEF_NODATA = -128
@@ -319,6 +342,8 @@ def _(os, tempfile):
                 2024: (140, 86, 75), 2025: (45, 45, 45),
                 -1: (222, 222, 222), -2: (150, 150, 150), -3: (236, 236, 236)}
     return (
+        ADMIN_PM,
+        ADMIN_PQ,
         AEF_FROM0,
         AEF_INDEX_URL,
         AEF_LEVEL_FOR_RES,
@@ -1025,6 +1050,103 @@ def _(duckdb):
 
 
 @app.cell
+def _(ADMIN_PQ, HOME, duckdb):
+    # ---- the place under a click: one point query against fused/overture ------
+    # Overture's divisions theme as Fused geo-partitions it on Source
+    # Cooperative, 79 GeoParquet files per type, each row with a bbox struct.
+    # division_area says which polygons hold the point: country, region,
+    # county, localadmin, locality, every level Overture draws, anywhere.
+    # division, joined on the ids, adds local_type, the country's own word for
+    # the level (city, town, village, prefecture, governorate, state). DuckDB
+    # reads the footers, keeps the row groups whose bbox stats can hold the
+    # point, and runs ST_Contains on what is left. Its own connection, a
+    # cursor per call so a click and the warm-up can overlap, the object cache
+    # on so the footers are read once: 7 s cold, 1 to 3 s after.
+    import threading as _th
+
+    _dv = {"con": None, "err": None}
+    _lock = _th.Lock()
+    _AREA = f"{ADMIN_PQ}/type=division_area/*.parquet"
+    _DIV = f"{ADMIN_PQ}/type=division/*.parquet"
+    _ORDER = {"locality": 0, "localadmin": 1, "county": 2, "region": 3, "country": 4}
+
+    def _connect():
+        with _lock:
+            if _dv["con"] is None and _dv["err"] is None:
+                try:
+                    c = duckdb.connect()
+                    for ext in ("spatial", "httpfs"):
+                        try:
+                            c.execute(f"LOAD {ext}")
+                        except Exception:
+                            c.execute(f"INSTALL {ext}; LOAD {ext}")
+                    # an open bucket: the region and path-style URLs (the
+                    # bucket name has dots in it), nothing to sign with.
+                    # GLOBAL, because a cursor is its own session and a plain
+                    # SET would not reach it
+                    c.execute("SET GLOBAL s3_region='us-west-2'; SET GLOBAL s3_url_style='path'; SET GLOBAL enable_object_cache=true")
+                    _dv["con"] = c
+                except Exception as e:
+                    _dv["err"] = e
+            return _dv["con"]
+
+    _Q_AREA = (
+        "SELECT subtype, names.primary, names.common['en'], country, division_id "
+        f"FROM read_parquet('{_AREA}', hive_partitioning=0) "
+        "WHERE bbox.xmin <= $x AND bbox.xmax >= $x AND bbox.ymin <= $y AND bbox.ymax >= $y "
+        "AND class = 'land' AND ST_Contains(geometry, ST_Point($x, $y))"
+    )
+    # the country filter is what makes the join quick: the files are spatial,
+    # so each row group carries a tight country range and most are skipped
+    # unread (25 s cold at Wuhan against 165 s without it, 1 to 3 s warm)
+    _Q_DIV = (
+        "SELECT id, local_type['en'], population "
+        f"FROM read_parquet('{_DIV}', hive_partitioning=0) "
+        "WHERE country = $country AND list_contains($ids, id)"
+    )
+
+    def division_at(lon, lat):
+        """The divisions holding the point, smallest first: a list of
+        {subtype, name, name_en, local_type, population}, locality up to
+        country, whichever Overture draws there. Raises on a failed read so
+        the caller can say so."""
+        c = _connect()
+        if c is None:
+            raise _dv["err"]
+        cur = c.cursor()
+        rows = cur.execute(_Q_AREA, {"x": float(lon), "y": float(lat)}).fetchall()
+        seen, out = set(), []
+        for sub, name, name_en, country, did in rows:
+            if sub in seen:
+                continue
+            seen.add(sub)
+            out.append({"subtype": sub, "name": name, "name_en": name_en, "local_type": None,
+                        "population": None, "id": did, "country": country})
+        out.sort(key=lambda d: _ORDER.get(d["subtype"], -1))
+        ids = [d["id"] for d in out if d["id"]]
+        country = next((d["country"] for d in out if d["country"]), None)
+        if ids and country:
+            try:
+                extra = {i: (lt, pop) for i, lt, pop in cur.execute(_Q_DIV, {"country": country, "ids": ids}).fetchall()}
+            except Exception:
+                extra = {}
+            for d in out:
+                d["local_type"], d["population"] = extra.get(d["id"], (None, None))
+        return out
+
+    # the footers, read now rather than on the first click, off the main
+    # thread: about 7 s for division_area and 25 s more for division
+    def _warm():
+        try:
+            division_at(HOME["longitude"], HOME["latitude"])
+        except Exception:
+            pass
+
+    _th.Thread(target=_warm, daemon=True).start()
+    return (division_at,)
+
+
+@app.cell
 def _(
     ALPHA_FILL,
     ALPHA_QUIET,
@@ -1302,6 +1424,10 @@ def _(anywidget, asyncio, traitlets):
         import {BitmapLayer, PathLayer} from "https://esm.sh/@deck.gl/layers@9.3.10?deps=@deck.gl/core@9.3.10,apache-arrow@18.1.0,@luma.gl/core@9.3.6,@luma.gl/engine@9.3.6,@luma.gl/webgl@9.3.6,@luma.gl/shadertools@9.3.6,@luma.gl/gltf@9.3.6";
         import {TileLayer, H3HexagonLayer} from "https://esm.sh/@deck.gl/geo-layers@9.3.10?deps=@deck.gl/core@9.3.10,@deck.gl/extensions@9.3.10,@deck.gl/layers@9.3.10,@deck.gl/mesh-layers@9.3.10,apache-arrow@18.1.0,@luma.gl/core@9.3.6,@luma.gl/engine@9.3.6,@luma.gl/webgl@9.3.6,@luma.gl/shadertools@9.3.6,@luma.gl/gltf@9.3.6";
         import {latLngToCell, getResolution, cellToBoundary} from "https://esm.sh/h3-js@4.5.0";
+        import {Protocol as PMProtocol} from "https://esm.sh/pmtiles@4.5.0";
+        // the Overture division tiles come straight off the Source Cooperative
+        // bucket by range request: one protocol handler, shared by both maps
+        maplibregl.addProtocol("pmtiles", new PMProtocol().tile);
 
         const STYLE = "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json";
 
@@ -1820,6 +1946,43 @@ def _(anywidget, asyncio, traitlets):
           const labelSlot = () => cfg.labels_slot || "watername_ocean";
           const slot = labelSlot;
           const ring = (h) => { try { return cellToBoundary(h, true); } catch (e) { return null; } };
+          // Overture divisions as PMTiles on Source Cooperative (cboettig/
+          // overturemaps), regions and counties, the world over: one vector
+          // source per level on each map and a fill at zero opacity that is
+          // never seen, so queryRenderedFeatures can name the region and
+          // county under a click from the tiles already on screen. No lines:
+          // the division lines came out on 2026-09-02 and stay out.
+          const ADMIN = ["regions", "counties"];
+          const aSrc = (k) => "admin-" + k + "-src", aFill = (k) => "admin-" + k + "-fill";
+          const adminSync = (m) => {
+            if (!m || !cfg.admin_pm) return;
+            for (const k of ADMIN) {
+              if (m.getSource(aSrc(k))) continue;
+              try {
+                m.addSource(aSrc(k), {type: "vector", url: "pmtiles://" + cfg.admin_pm + "/" + k + ".pmtiles"});
+                m.addLayer({id: aFill(k), type: "fill", source: aSrc(k), "source-layer": k,
+                  filter: ["==", ["get", "class"], "land"], paint: {"fill-opacity": 0}}, slot());
+              } catch (e) { console.error("admin " + k, e); }
+            }
+          };
+          // the region and county under a point, from the tiles on screen.
+          // Empty when the tiles are not in yet; the kernel's query fills
+          // the same levels then.
+          const adminAt = (m, pt) => {
+            const out = {};
+            const one = (k) => {
+              if (!m.getLayer(aFill(k))) return null;
+              const fs = m.queryRenderedFeatures(pt, {layers: [aFill(k)]});
+              return fs && fs.length ? fs[0].properties : null;
+            };
+            try {
+              const r = one("regions");
+              if (r) out.region = r.name_en || r["names.primary"] || r.name || null;
+              const c = one("counties");
+              if (c) out.county = c.name_en || c["names.primary"] || c.name || null;
+            } catch (e) {}
+            return out;
+          };
           const outline = (id, h, color, width) => {
             const r = h ? ring(h) : null;
             if (!r) return null;
@@ -1960,7 +2123,7 @@ def _(anywidget, asyncio, traitlets):
             mapL.on("move", follow(mapL, mapR));
             mapR.on("move", follow(mapR, mapL));
             let ready = 0;
-            const onLoad = () => { ready++; if (ready === 2) { labels(labelsOn); update(); sendView(); } };
+            const onLoad = () => { ready++; if (ready === 2) { labels(labelsOn); adminSync(mapL); adminSync(mapR); update(); sendView(); } };
             mapL.on("load", onLoad); mapR.on("load", onLoad);
             mapL.on("moveend", sendView); mapR.on("moveend", sendView);
             mapL.on("zoom", () => update());
@@ -1973,7 +2136,7 @@ def _(anywidget, asyncio, traitlets):
               m.on("mouseout", () => { if (hover) { hover = null; updateHover(); } });
               m.on("click", (e) => {
                 const h = cellAt(e.lngLat);
-                model.set("pick", JSON.stringify({cell: h, lon: e.lngLat.lng, lat: e.lngLat.lat, n: ++seq}));
+                model.set("pick", JSON.stringify({cell: h, lon: e.lngLat.lng, lat: e.lngLat.lat, admin: adminAt(m, e.point), n: ++seq}));
                 model.save_changes();
               });
               m.on("error", (ev) => { if (ev && ev.error && ev.error.message) say("map: " + ev.error.message); });
@@ -2017,6 +2180,7 @@ def _(anywidget, asyncio, traitlets):
 
 @app.cell
 def _(
+    ADMIN_PM,
     AEF_FROM0,
     AEF_TO0,
     AEF_YEARS_ALL,
@@ -2044,14 +2208,14 @@ def _(
         "aef_from": AEF_FROM0, "aef_to": AEF_TO0, "aef_years": list(AEF_YEARS_ALL),
         "fills": [[f, FILL_SHORT[f], FILL_NAMES[f]] for f in FILLS],
         "hex_zoom": HEX_ZOOM, "extent": list(wsf_bounds),
-        "minimal": STRIP_MINIMAL,
+        "minimal": STRIP_MINIMAL, "admin_pm": ADMIN_PM,
     }))
     HOLD = {
         "frame": None, "sent": None, "box": None, "res": None, "vs": None,
         "busy": False, "pending": None, "pending_force": False, "task": None, "loop": None,
         "s2y": S2_YEAR0, "s2scale": S2_SCALE0, "s2gen": 0, "fill": FILLS[0], "labels": True,
         "y0": AEF_FROM0, "y1": AEF_TO0,
-        "hit": None, "memo": {}, "aef": {}, "wsf": {}, "h_cam": None, "h_ctl": None, "h_pick": None,
+        "hit": None, "pick_n": None, "panel_body": "", "memo": {}, "aef": {}, "wsf": {}, "h_cam": None, "h_ctl": None, "h_pick": None,
         "runs": 0,
     }
     pair
@@ -2076,6 +2240,7 @@ def _(
     build_frame,
     con,
     contains,
+    division_at,
     json,
     np,
     pad_box,
@@ -2274,6 +2439,35 @@ def _(
     def _f(v, d=3):
         return "n/a" if v is None or (isinstance(v, float) and np.isnan(v)) else f"{v:.{d}f}"
 
+    # where: the place ladder under the click, from Overture divisions. The
+    # region and county come with the click from the PMTiles in the browser;
+    # the whole ladder, local_type included, is a query against Source
+    # Cooperative off the loop, and lands after if this click is still the
+    # last one. Each level is printed the way Overture names it, with the
+    # country's own word beside when it has one (city, town, prefecture).
+    def _place_from_tiles(adm):
+        out = []
+        if adm.get("county"):
+            out.append({"subtype": "county", "name": adm["county"]})
+        if adm.get("region"):
+            out.append({"subtype": "region", "name": adm["region"]})
+        return out
+
+    def _place_line(levels, pending):
+        bits = []
+        for lv in levels:
+            nm = lv.get("name") or "?"
+            if lv.get("name_en") and lv["name_en"] != nm:
+                nm = f"{nm} {lv['name_en']}"
+            lt = lv.get("local_type")
+            tag = lv["subtype"] + (f", {lt}" if lt and lt != lv["subtype"] else "")
+            bits.append(f"<b>{nm}</b> <span style='color:#777'>({tag})</span>")
+        if pending:
+            bits.append("<span style='opacity:.5'>the rest from Overture…</span>")
+        if not bits:
+            return ""
+        return "<div style='font-size:13px;line-height:1.5'>" + " · ".join(bits) + "</div>"
+
     def _on_pick(change):
         fr = HOLD["frame"]
         try:
@@ -2299,9 +2493,12 @@ def _(
             row_steps = fr["steps"][:, ci] if r is not None and ci < len(fr["cellid"]) else []
             lat, lon = p.get("lat"), p.get("lon")
             where = f" at {lat:.4f}, {lon:.4f}" if lat is not None and lon is not None else ""
+            n, adm = p.get("n"), p.get("admin") or {}
+            HOLD["pick_n"] = n
+            l0 = _place_line(_place_from_tiles(adm), pending=True) if lon is not None else ""
             if r is None:
                 HOLD["hit"] = None
-                pair.panel = f"<span style='opacity:.7'>{cellh}{where}: not in the current frame</span>"
+                body = f"<span style='opacity:.7'>{cellh}{where}: not in the current frame</span>"
             else:
                 HOLD["hit"] = cell if HOLD["hit"] != cell else None
                 pb, pn, by, byn, fd, dsp, dmx, wn = r
@@ -2345,10 +2542,24 @@ def _(
                     + (f" · a step counts as change above {_f(d0)}" if not np.isnan(d0) else "")
                     + f" · first built-up {fd} · {CELL_KM2.get(HOLD['res'], 0):.3f} km²{where}"
                 )
-                pair.panel = (
+                body = (
                     f"<div style='font-size:14px;line-height:1.5'>{l1}<br>{l2}</div>"
                     + ("" if STRIP_MINIMAL else f"<div style='font-size:12px;color:#777'>{detail}</div>")
                 )
+            HOLD["panel_body"] = body
+            pair.panel = l0 + body
+            if l0:
+                async def _place_later(n=n, lon=lon, lat=lat, adm=adm):
+                    try:
+                        d = await asyncio.to_thread(division_at, lon, lat)
+                    except Exception as e:
+                        d = []
+                        _say(f"place (fused/overture): {e}")
+                    if HOLD.get("pick_n") != n:
+                        return
+                    pair.panel = _place_line(d or _place_from_tiles(adm), pending=False) + HOLD["panel_body"]
+
+                _spawn(_place_later())
         except Exception as e:
             pair.panel = f"<span style='opacity:.7'>click: {e}</span>"
         _paint()
