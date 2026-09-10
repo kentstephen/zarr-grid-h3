@@ -154,48 +154,99 @@ def _():
 def _(mo):
     mo.md("""
     [![Open in molab](https://molab.marimo.io/molab-shield.svg)](https://molab.marimo.io/github/github.com/kentstephen/zarr-grid-h3/blob/main/s2-wsf-aef-overture-pair.py)
-    <small>molab sits next to the data and is the faster place to run this;
-    locally: `uv run marimo edit s2-wsf-aef-overture-pair.py --sandbox`</small>
+    <small>molab runs in the same region as the data and is the faster place to open this notebook.
+    Locally: `uv run marimo edit s2-wsf-aef-overture-pair.py --sandbox`</small>
 
-    # The S2 settlement pair
+    # Settlement growth: Sentinel-2, WSF Tracker and AlphaEarth on one H3 grid
 
-    **Left**: the Sentinel-2 yearly mosaic, a picture, never covered. **Right**:
-    one H3 fill over the same camera. Pan either map and both move. Hover a
-    hexagon on either side and its ring is drawn on both.
+    This notebook places a true-colour Sentinel-2 mosaic beside a hexagon map
+    built from two independent records of change, so that what the satellite
+    shows can be read against what the models say. All three sources are
+    read live from Source Cooperative; nothing is downloaded ahead of time.
 
-    - **S2** (left header, a slider, the arrow keys or `[` `]`): which
-      mosaic, 2022 to 2025; the picture follows the drag. The maps' own
-      keyboard is off, so the arrows work after a click on either map. The `scale` slider is a gain on
-      the picture. Where the yearly mosaic has a
-      hole (2022 over Nusantara: cloud all year), the same year's temporal
-      median (Earth Genome's other composite, 2022-2023) shows through, and
-      the status line says what share of the pixels came from it. **FIND** under them: a Photon
-      geocoder; the hits drop down as you type, arrows or the mouse pick one,
-      Enter or a click flies both maps there.
-    - **FILL** (keys `1` to `5`): **WSF built**, the record itself as a
-      raster, the half-year each 10 m pixel first read as built-up, one color
-      per year (no hexagons) · **WSF grew**, the share of the hexagon that
-      became built-up inside the window · **WSF build year**, the year most of that
-      new ground arrived, one color per year · **AEF changed**, how far the
-      AlphaEarth fingerprint moved between the two ends of the window, on a
-      ramp · **AEF change year**, the first year inside the window the
-      fingerprint jumped past the quiet level, the same colors per year.
-    - **WINDOW** (the slider, keys `-` `=` for the from end and `_` `+` for
-      the to end): whole years 2017 to 2025, read by both sources. Drag either
-      handle; the frame is rebuilt when you let go (WSF is folded once per
-      view; only the AlphaEarth years not yet held are fetched).
-    - Click a hexagon for its story: what WSF says, when AlphaEarth saw the
-      ground change. `L` toggles the basemap labels, `F`
-      full screen.
+    **Left pane**: the Sentinel-2 yearly mosaic (Earth Genome, 2022 to 2025),
+    rendered by the kernel from the cloud-optimised GeoTIFFs. It is never
+    covered by data layers. **Right pane**: one opaque H3 fill per hexagon over
+    the same camera. The two panes share one view: pan or zoom either and both
+    follow, and a hexagon hovered on one side is outlined on both.
 
-    The two year fills share one palette: a hexagon that is the same color on
-    **WSF build year** and **AEF change year** is a hexagon where the
-    settlement record and the embedding agree on the year.
+    ## Sources
 
-    The hexagons fold from zoom 9 up and run to res 12 (about three pixels
-    of either source) past zoom 14.6. Below zoom 9 the right pane shows the
-    WSF pyramid (the earliest built-up date under each pixel) and the left
-    keeps the mosaic down to zoom 7.
+    - **WSF Tracker** (DLR and MindEarth). One value per 10 m pixel: the
+      half-year the pixel was first observed as built-up, from July 2016 to
+      January 2026. Per hexagon the notebook derives the share built-up by the
+      end of the window, the share that became built-up inside it, and the
+      year most of that new ground arrived.
+    - **AlphaEarth Foundations** (Google DeepMind). A 64-dimensional embedding
+      per pixel per year, 2017 to 2025. Per hexagon the notebook takes the
+      mean embedding for each year and measures how far it moved between the
+      two ends of the window (1 minus cosine similarity), together with the
+      first year inside the window in which it jumped past a quiet level set
+      by the hexagons WSF says did not grow.
+    - **Overture Maps divisions**. Used only to name the place under a click,
+      from locality up to country. See the click panel below.
+
+    ## Controls
+
+    - **S2** (left header): a slider over the mosaic years, also driven by the
+      arrow keys or `[` and `]` after a click on either map. The `scale` slider
+      is a gain on the picture. Where a yearly mosaic has a gap (for example
+      2022 over Nusantara, clouded all year), the same year's temporal median
+      composite fills it and the status line reports the share of pixels that
+      came from it.
+    - **FIND**: a place search (Photon, OpenStreetMap data). Results drop down
+      as you type; Enter or a click flies both maps there.
+    - **FILL** (keys `1` to `5`) selects what the right pane shows:
+      **WSF built**, the record itself as a raster, one colour per year of
+      first detection; **WSF grew**, the share of each hexagon that became
+      built-up inside the window; **WSF build year**, the year most of that
+      new ground arrived; **AEF changed**, how far the AlphaEarth embedding
+      moved between the ends of the window; **AEF change year**, the first
+      year inside the window the embedding jumped past the quiet level.
+    - **WINDOW**: a two-handle slider over whole years 2017 to 2025, read by
+      both sources (`-` and `=` move the start, `_` and `+` the end). The
+      frame is rebuilt when a handle is released. WSF is folded once per view;
+      only the AlphaEarth years not already held are fetched.
+    - `L` toggles basemap labels, `F` enters full screen.
+
+    ## Reading the map
+
+    The two year fills share one palette. A hexagon that has the same colour
+    under **WSF build year** and **AEF change year** is one where the
+    settlement record and the embedding agree on the year of change.
+
+    Hexagons appear from zoom 9 and refine to H3 resolution 12 (about three
+    pixels of either source) beyond zoom 14.6. Below zoom 9 the right pane
+    shows the WSF pyramid, the earliest built-up date under each pixel, and
+    the left pane keeps the mosaic down to zoom 7.
+
+    ## The click panel
+
+    Clicking a hexagon writes its account below the map: what WSF recorded
+    there and when, how far and when AlphaEarth saw the ground change, and
+    the place it belongs to. The place is the ladder of Overture divisions
+    that contain the point, smallest first, each labelled with its level and
+    with the local term for that level where Overture provides one (city,
+    town, prefecture, governorate). Region and county are answered at once
+    from vector tiles in the browser; the full ladder follows from a point
+    query against the Overture GeoParquet on Source Cooperative, typically
+    within a few seconds once the kernel has warmed up.
+
+    ## Method
+
+    Every raster is folded onto H3 cells by the H3 UDF inside DataFusion: the
+    pixels cross as one dataset and the cell is the GROUP BY. Nothing is
+    tessellated in the kernel; the browser receives cell ids and colours.
+
+    ## Attribution
+
+    WSF Tracker (c) DLR and MindEarth, via Source Cooperative (mindearth/wsf,
+    DOI 10.5281/zenodo.20424537). The AlphaEarth Foundations Satellite
+    Embedding dataset is produced by Google and Google DeepMind (CC BY 4.0).
+    Sentinel-2 yearly and temporal mosaics by Earth Genome from Copernicus
+    Sentinel data (CC BY 4.0). Overture Maps divisions (ODbL) via Source
+    Cooperative (cboettig/overturemaps, fused/overture). Place search by
+    Photon (komoot) over OpenStreetMap data (ODbL). Basemap by Carto.
     """)
     return
 
@@ -2644,18 +2695,24 @@ def _(mo):
     mo.md("""
     ## Under the map
 
-    DuckDB over the CURRENT view's cells (press the button after the map
-    settles): `npx` (sampled WSF pixels), `p_built` (built-up by
-    the end of the window), `p_new` (became built-up inside it), `grew`,
-    `byear` / `byear_name` (the year most of the new ground arrived; -1 built
-    before the window, -3 nothing built), `first_date` (the record's first
-    built-up half-year), `disp` (the AlphaEarth displacement between the
-    window's two ends), `disp_max` (its largest single step) with one
-    `step_YYYY` per step, `moved`, `when` (the year, or -1 never, -2 no
-    embedding) / `when_name`.
+    Press the button once the map has settled to query the current view's
+    hexagons with DuckDB. Columns, one row per hexagon:
 
-    The table crosses the two year fills: how many cells WSF and AlphaEarth
-    put in the same year.
+    - `npx`: WSF pixels sampled in the hexagon.
+    - `p_built`: share built-up by the end of the window; `p_new`: share that
+      became built-up inside it; `grew`: whether `p_new` clears the growth
+      threshold.
+    - `byear` and `byear_name`: the year most of the new ground arrived
+      (-1 built before the window, -3 nothing built).
+    - `first_date`: the record's first built-up half-year in the hexagon.
+    - `disp`: the AlphaEarth displacement between the ends of the window;
+      `disp_max`: its largest single step, with one `step_YYYY` column per
+      step; `moved`: whether the displacement clears the quiet level.
+    - `when` and `when_name`: the first year the embedding jumped
+      (-1 never, -2 no embedding).
+
+    The second table crosses the two year fills and counts how many hexagons
+    WSF and AlphaEarth place in the same year.
     """)
     return
 
